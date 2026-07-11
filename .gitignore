@@ -1,0 +1,9 @@
+
+## ignore docs
+doc\Computer Architecture A Quantitative Approach (5th edition) (1).pdf
+doc\Computer Organization and Design RISC-V edition.pdf
+doc\phase1_module_breakdown.md
+doc\riscv_cpu_project_plan.md
+
+## common out files
+*.log
