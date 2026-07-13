@@ -1,9 +1,18 @@
+## documentation is currently just a placeholder, so ignore it for now
+doc/*
 
-## ignore docs
-doc\Computer Architecture A Quantitative Approach (5th edition) (1).pdf
-doc\Computer Organization and Design RISC-V edition.pdf
-doc\phase1_module_breakdown.md
-doc\riscv_cpu_project_plan.md
+## verilator build output
+verif/sim/obj_dir/
 
-## common out files
+## per-run artifacts: compiled programs, memory images, waveforms
+verif/sim/runs/**/*.elf
+verif/sim/runs/**/*.bin
+verif/sim/runs/**/*.hex
+verif/sim/runs/**/*.vcd
+verif/sim/runs/**/*.fst
+verif/sim/runs/**/*.log
+
 *.log
+
+## per-run artifacts
+verif/sim/riscv-tests/upstream/

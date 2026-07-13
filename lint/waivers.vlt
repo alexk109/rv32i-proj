@@ -1,0 +1,29 @@
+// Lint waivers for the RTL.
+//
+// Only for warnings that are correct-by-design. Anything that represents real
+// unfinished work stays un-waived, so the lint gate keeps complaining about it.
+
+`verilator_config
+
+// A package is a vocabulary, not a design unit. It is expected to define more
+// encodings than any single instantiation happens to reference.
+lint_off -rule UNUSEDPARAM -file "*design/pkg/riscv_pkg.sv"
+
+// The decoder reads only the opcode, funct3, and bit 30. The rest of the
+// instruction word goes straight to the regfile and imm_gen, so those bits are
+// genuinely unread here.
+lint_off -rule UNUSEDSIGNAL -file "*design/src/decoder.sv" -match "*'instr'*"
+
+// Both memories are far smaller than the 32-bit address space, so the upper
+// address bits are unreachable by construction.
+lint_off -rule UNUSEDSIGNAL -file "*design/src/instr_mem.sv" -match "*'addr'*"
+lint_off -rule UNUSEDSIGNAL -file "*design/src/data_mem.sv" -match "*'addr'*"
+
+// A byte or half-word load reads only the low lanes of the shifted word.
+lint_off -rule UNUSEDSIGNAL -file "*design/src/data_mem.sv" -match "*'rword_shifted'*"
+
+// ctrl.illegal is computed and deliberately unconsumed in Phase 1: an illegal
+// instruction decodes to an architectural NOP rather than a trap. The trap unit
+// in Phase 3E is what will read this bit. REMOVE THIS WAIVER THEN — if it is
+// still here after the trap unit exists, the trap unit is not wired up.
+lint_off -rule UNUSEDSIGNAL -file "*design/cpu_single_cycle_top.sv" -match "*'ctrl'*"

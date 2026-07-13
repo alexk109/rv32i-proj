@@ -22,7 +22,7 @@ module reg_file
 );
 
 
-  logic [XLEN-1:0] regs [0:REG_COUNT-1]; // 32 x 32 register file
+  logic [XLEN-1:0] regs [0:REG_COUNT-1]  /* verilator public_flat_rd */; // 32 x 32 register file
 
 
   // combinational read ports
@@ -31,8 +31,8 @@ module reg_file
 
   //sequential write port
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rstn) begin
-      regs <= '0;
+    if (!rst_n) begin
+      regs <= '{default: '0};
     end 
     else if (reg_write && rd_addr == 5'd0) begin
       // writes to x0 are ignored

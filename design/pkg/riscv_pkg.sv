@@ -58,6 +58,7 @@ package riscv_pkg;
   //--------------------------------------------------------------------------
   localparam logic [2:0] F3_BEQ  = 3'b000;
   localparam logic [2:0] F3_BNE  = 3'b001;
+  // 010 and 011 are reserved for future use in the base ISA
   localparam logic [2:0] F3_BLT  = 3'b100;   // signed
   localparam logic [2:0] F3_BGE  = 3'b101;   // signed
   localparam logic [2:0] F3_BLTU = 3'b110;   // unsigned

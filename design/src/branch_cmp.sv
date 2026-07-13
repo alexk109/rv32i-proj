@@ -8,14 +8,16 @@ module branch_cmp
     input  logic [XLEN-1:0] rs1,
     input  logic [XLEN-1:0] rs2,
     input  branch_op_e      branch_op,          // which branch condition
-    output logic            take_branch         // branch condition met
+    input  logic            branch,             // from ctrl: 1 = conditional branch, 0 = not a branch
+    output logic            branch_taken         // branch condition met
 );
 
+logic take_branch; //internal signal for branch condition result
 
 always_comb begin
     take_branch = 1'b0;  // default to not taken
     
-    unique case (branch_op) // which branch condition
+    case (branch_op) // which branch condition
         BR_EQ:  take_branch = (rs1 == rs2);
         BR_NE:  take_branch = (rs1 != rs2);
         BR_LT:  take_branch = ($signed(rs1) < $signed(rs2));
@@ -26,6 +28,7 @@ always_comb begin
     endcase
 end
 
+assign branch_taken = branch & take_branch; // only take branch if it is a conditional branch
 
 endmodule
 
