@@ -58,7 +58,7 @@ RVCFLAGS  := -march=rv32i -mabi=ilp32 -nostdlib -Ttext=0
 # nondeterministic failure, which is where reset bugs hide.
 SIMFLAGS  := --x-assign unique --x-initial unique
 
-.PHONY: all lint lint-verilator lint-verible lint-synth fmt fmt-check sim run dump diff diffall regress rv32ui-fetch clean help
+.PHONY: all lint lint-verilator lint-verible lint-synth fmt fmt-check sim run dump diff diffall verify regress rv32ui-fetch clean help
 
 all: lint
 
@@ -162,25 +162,44 @@ run: $(SIM_BIN) $(RUN_DIR)/$(PROG).hex
 # Spike co-simulation will take — swap single-cycle's log for Spike's.
 #-----------------------------------------------------------------------------
 
-DIFF_PROGS ?= smoke alu branch lui_auipc mem jump x0 arraysum bubblesort search statemachine
+DIFF_PROGS ?= smoke alu branch lui_auipc mem jump x0 hazards arraysum bubblesort search statemachine
 
-## diff: run PROG on both cores and diff their retirement streams
+# Every predictor scheme must keep the equivalence green — prediction changes
+# timing, never architectural results. The JAL-link forwarding bug was invisible
+# with PREDICTOR=none and only appeared under btfn, which is exactly why `verify`
+# sweeps all of them.
+PREDICTORS ?= none btfn 2bit
+
+## diff: run PROG on both cores and diff retirement streams (pipeline uses PREDICTOR)
+#
+# The `|| true` matters: a failing run (wrong result -> exit 1, or a timeout) must
+# NOT abort the recipe before the comparison, or the failure is silently dropped.
+# A non-zero run still leaves a partial retire.log, and the length/content diff
+# then reports it as a mismatch — which is exactly the failure we want to see.
 diff:
-	@$(MAKE) -s run TOP=cpu_single_cycle_top PROG=$(PROG) RUN=diff_$(PROG)_sc   >/dev/null 2>&1
-	@$(MAKE) -s run TOP=cpu_pipeline_top     PROG=$(PROG) RUN=diff_$(PROG)_pipe >/dev/null 2>&1
-	@if diff -q $(RUNS)/diff_$(PROG)_sc/retire.log $(RUNS)/diff_$(PROG)_pipe/retire.log >/dev/null; then \
+	@$(MAKE) -s run TOP=cpu_single_cycle_top PROG=$(PROG) RUN=diff_$(PROG)_sc   >/dev/null 2>&1 || true
+	@$(MAKE) -s run TOP=cpu_pipeline_top PREDICTOR=$(PREDICTOR) PROG=$(PROG) RUN=diff_$(PROG)_pipe >/dev/null 2>&1 || true
+	@if diff -q $(RUNS)/diff_$(PROG)_sc/retire.log $(RUNS)/diff_$(PROG)_pipe/retire.log >/dev/null 2>&1; then \
 	  echo "  DIFF OK    $(PROG)"; \
 	else \
-	  echo "  DIFF FAIL  $(PROG)  (single-cycle vs pipeline retirement mismatch):"; \
-	  diff $(RUNS)/diff_$(PROG)_sc/retire.log $(RUNS)/diff_$(PROG)_pipe/retire.log | head -6; \
+	  echo "  DIFF FAIL  $(PROG)  (single-cycle vs pipeline[$(PREDICTOR)] mismatch or run error):"; \
+	  diff $(RUNS)/diff_$(PROG)_sc/retire.log $(RUNS)/diff_$(PROG)_pipe/retire.log 2>&1 | head -6; \
 	fi
 
-## diffall: equivalence-check every program in DIFF_PROGS
-diffall: sim
+## diffall: equivalence-check every DIFF_PROGS on the pipeline (PREDICTOR) vs golden
+diffall:
 	@$(MAKE) -s sim TOP=cpu_single_cycle_top >/dev/null 2>&1
-	@$(MAKE) -s sim TOP=cpu_pipeline_top     >/dev/null 2>&1
-	@echo "pipeline vs single-cycle (golden) — retirement equivalence:"
-	@for p in $(DIFF_PROGS); do $(MAKE) -s diff PROG=$$p; done
+	@$(MAKE) -s sim TOP=cpu_pipeline_top PREDICTOR=$(PREDICTOR) >/dev/null 2>&1
+	@echo "pipeline[$(PREDICTOR)] vs single-cycle (golden) — retirement equivalence:"
+	@for p in $(DIFF_PROGS); do $(MAKE) -s diff PROG=$$p PREDICTOR=$(PREDICTOR); done
+
+## verify: full functional check — diffall + rv32ui for EVERY predictor scheme
+verify:
+	@for pred in $(PREDICTORS); do \
+	  echo "==================== PREDICTOR=$$pred ===================="; \
+	  $(MAKE) -s diffall PREDICTOR=$$pred; \
+	  $(MAKE) -s regress TOP=cpu_pipeline_top PREDICTOR=$$pred | grep '^rv32ui'; \
+	done
 
 #-----------------------------------------------------------------------------
 # riscv-tests (rv32ui)

@@ -91,6 +91,7 @@ module cpu_pipeline_top
   .rst_n           (rst_n), // I
 
   // ---- PREDICT: queried in IF, combinational -------------------------
+  .predict_instr   (if_instr),        // I: the instruction being fetched in IF
   .predict_pc      (pc_q),            // I: the PC being fetched in IF
   .predict_taken   (predict_taken),   // O
   .predict_target  (predict_target),  // O [XLEN-1:0]
@@ -204,25 +205,27 @@ module cpu_pipeline_top
   
   //forwarding logic:
   // if the instruction in EX needs a register that is being written by MEM or WB, forward the value from the later stage
+  logic [XLEN-1:0] mem_alu_result; // signal from MEM stage to forward to EX stage
   logic [XLEN-1:0] ex_rs1;
   logic [XLEN-1:0] ex_rs2;
 
   logic [XLEN-1:0] alu_input_a;
   logic [XLEN-1:0] alu_input_b;
+  
+  assign ex_rs1 = (id_ex_q.ctrl.uses_rs1 && ex_mem_q.valid && ex_mem_q.ctrl.reg_write && (ex_mem_q.rd_addr == id_ex_q.rs1_addr) && (ex_mem_q.rd_addr != 5'd0)) ? mem_alu_result :         //forward from MEM stage
+                  (id_ex_q.ctrl.uses_rs1 && mem_wb_q.valid && mem_wb_q.ctrl.reg_write && (mem_wb_q.rd_addr == id_ex_q.rs1_addr) && (mem_wb_q.rd_addr != 5'd0)) ? wb_rd_data            //forward from WB stage
+                                                                                                                                                                : id_ex_q.rs1_data;    //no forwarding, use value from ID stage
+
+  assign ex_rs2 = (id_ex_q.ctrl.uses_rs2 && ex_mem_q.valid && ex_mem_q.ctrl.reg_write && (ex_mem_q.rd_addr == id_ex_q.rs2_addr) && (ex_mem_q.rd_addr != 5'd0)) ? mem_alu_result :         //forward from MEM stage
+                  (id_ex_q.ctrl.uses_rs2 && mem_wb_q.valid && mem_wb_q.ctrl.reg_write && (mem_wb_q.rd_addr == id_ex_q.rs2_addr) && (mem_wb_q.rd_addr != 5'd0)) ? wb_rd_data            //forward from WB stage
+                                                                                                                                                                : id_ex_q.rs2_data;    // no forward
+
+  //prediction signals and logic back to ID
   logic [XLEN-1:0] ex_alu_result;
   logic            ex_branch_taken;
   logic            actual_taken; //prediction was correct or not
-  
-  assign ex_rs1 = (id_ex_q.ctrl.uses_rs1 && ex_mem_q.valid && ex_mem_q.ctrl.reg_write && (ex_mem_q.rd_addr == id_ex_q.rs1_addr) && (ex_mem_q.rd_addr != 5'd0)) ? ex_mem_q.alu_result : //forward from MEM stage
-                  (id_ex_q.ctrl.uses_rs1 && mem_wb_q.valid && mem_wb_q.ctrl.reg_write && (mem_wb_q.rd_addr == id_ex_q.rs1_addr) && (mem_wb_q.rd_addr != 5'd0)) ? wb_rd_data            //forward from WB stage
-                                                                                                                                                                : id_ex_q.rs1_data;     //no forwarding, use value from ID stage
-
-  assign ex_rs2 = (id_ex_q.ctrl.uses_rs2 && ex_mem_q.valid && ex_mem_q.ctrl.reg_write && (ex_mem_q.rd_addr == id_ex_q.rs2_addr) && (ex_mem_q.rd_addr != 5'd0)) ? ex_mem_q.alu_result : //forward from MEM stage
-                  (id_ex_q.ctrl.uses_rs2 && mem_wb_q.valid && mem_wb_q.ctrl.reg_write && (mem_wb_q.rd_addr == id_ex_q.rs2_addr) && (mem_wb_q.rd_addr != 5'd0)) ? wb_rd_data            //forward from WB stage
-                                                                                                                                                                : id_ex_q.rs2_data;     // no forward
 
   assign actual_taken = ex_branch_taken || id_ex_q.ctrl.jump;
- 
  
   //update the predictor with the actual outcome of the branch/jump
   assign update_valid   = id_ex_q.valid && (id_ex_q.ctrl.branch || id_ex_q.ctrl.jump);
@@ -300,11 +303,12 @@ module cpu_pipeline_top
 
   // ======================= MEM ========================================
 
+  //forwarding signal to EX stage
+  assign mem_alu_result = (ex_mem_q.ctrl.result_sel == RESULT_PC4) ? ex_mem_q.pc_plus4 : ex_mem_q.alu_result; //forward the correct value to EX stage, either ALU result or PC+4 for JAL/JALR
+  
   logic [XLEN-1:0] mem_rdata;
 
-  // A bubble must never touch memory. Its ctrl is already '0 (both because a
-  // reset/flushed register zeroes it and because the decoder defaults it), but
-  // gating on valid makes the guarantee explicit.
+  // gate with valid to prevent bubbles from touching memory
   logic mem_read_q;
   logic mem_write_q;
 

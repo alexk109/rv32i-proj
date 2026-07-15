@@ -8,7 +8,7 @@ module predictor
     input  logic            rst_n,
 
     // ---- PREDICT: queried in IF, combinational -------------------------
-    input  logic [XLEN-1:0] instr,           // the instruction being fetched
+    input  logic [XLEN-1:0] predict_instr,   // the instruction being fetched
     input  logic [XLEN-1:0] predict_pc,      // the PC being fetched
     output logic            predict_taken,   // guess: is this a taken branch/jump?
     output logic [XLEN-1:0] predict_target,  // guess: where does it go?
@@ -29,7 +29,7 @@ module predictor
 
      // everything else is unused but tied off for lint
     logic _unused;
-    assign _unused = |{clk, rst_n, instr, predict_pc, update_valid, update_pc,
+    assign _unused = |{clk, rst_n, predict_instr, predict_pc, update_valid, update_pc,
                       update_taken, update_target, update_mispred};
 
 endmodule
