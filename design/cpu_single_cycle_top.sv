@@ -25,7 +25,12 @@ module cpu_single_cycle_top
     output logic [3:0]      rvfi_mem_rmask,
     output logic [3:0]      rvfi_mem_wmask,
     output logic [XLEN-1:0] rvfi_mem_rdata,
-    output logic [XLEN-1:0] rvfi_mem_wdata
+    output logic [XLEN-1:0] rvfi_mem_wdata,
+
+    // Present for a uniform testbench interface. A single-cycle core never stalls
+    // or flushes, so both are constant 0 and its CPI is exactly 1.0.
+    output logic            perf_stall,
+    output logic            perf_flush
 `endif
 );
 
@@ -258,6 +263,9 @@ module cpu_single_cycle_top
 
   assign rvfi_mem_rdata = mem_rdata;
   assign rvfi_mem_wdata = rs2_data << {alu_result[1:0], 3'b000};
+
+  assign perf_stall = 1'b0;
+  assign perf_flush = 1'b0;
 
 `endif
 

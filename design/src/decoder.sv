@@ -33,6 +33,7 @@ always_comb begin
           ctrl.alu_src_a  = OPA_RS1;
           ctrl.alu_src_b  = 1'b1;       // immediate
           ctrl.result_sel = RESULT_MEM;
+          ctrl.uses_rs1   = 1'b1;       // address base
         end
         default: ;
       endcase
@@ -46,6 +47,7 @@ always_comb begin
       ctrl.alu_src_a  = OPA_RS1;
       ctrl.alu_src_b  = 1'b1;       // immediate
       ctrl.result_sel = RESULT_ALU;
+      ctrl.uses_rs1   = 1'b1;
 
       case (instr[14:12])
         F3_ADD_SUB: ctrl.alu_op = ALU_ADD;   // no SUBI since immediate
@@ -78,6 +80,8 @@ always_comb begin
           ctrl.alu_op    = ALU_ADD;
           ctrl.alu_src_a = OPA_RS1;
           ctrl.alu_src_b = 1'b1;      // immediate
+          ctrl.uses_rs1  = 1'b1;      // address base
+          ctrl.uses_rs2  = 1'b1;      // store data
         end
         default: ;
       endcase
@@ -89,6 +93,8 @@ always_comb begin
       ctrl.alu_src_a  = OPA_RS1;
       ctrl.alu_src_b  = 1'b0;       // rs2
       ctrl.result_sel = RESULT_ALU;
+      ctrl.uses_rs1   = 1'b1;
+      ctrl.uses_rs2   = 1'b1;
 
       case (instr[14:12])
         F3_ADD_SUB: ctrl.alu_op = instr[30] ? ALU_SUB : ALU_ADD;
@@ -127,8 +133,10 @@ always_comb begin
 
       case (instr[14:12])
         F3_BEQ, F3_BNE, F3_BLT, F3_BGE, F3_BLTU, F3_BGEU: begin
-          ctrl.illegal = 1'b0;
-          ctrl.branch  = 1'b1;
+          ctrl.illegal  = 1'b0;
+          ctrl.branch   = 1'b1;
+          ctrl.uses_rs1 = 1'b1;
+          ctrl.uses_rs2 = 1'b1;
         end
         default: ;
       endcase
@@ -143,6 +151,7 @@ always_comb begin
           ctrl.result_sel = RESULT_PC4;  // link value; target comes from dedicated adder
           ctrl.jump       = 1'b1;
           ctrl.jalr       = 1'b1;        // tells dedicated adder: base = rs1, not PC
+          ctrl.uses_rs1   = 1'b1;        // target = rs1 + imm
         end
         default: ;
       endcase

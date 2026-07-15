@@ -50,6 +50,8 @@ package ctrl_pkg;
     alu_op_e     alu_op;      // which ALU operation
     alu_src_a_e  alu_src_a;   // rs1 / PC / zero
     logic        alu_src_b;   // 0 = rs2, 1 = immediate
+    logic        uses_rs1;    // reads rs1 as a source — for hazard/forward gating
+    logic        uses_rs2;    // reads rs2 as a source — for hazard/forward gating
     result_sel_e result_sel;  // ALU / mem / PC+4
     logic        branch;      // conditional branch (BEQ...BGEU)
     branch_op_e  branch_op;   // condition for branch_cmp; meaningful only when branch=1

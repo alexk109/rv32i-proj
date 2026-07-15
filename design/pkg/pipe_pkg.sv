@@ -27,6 +27,8 @@ package pipe_pkg;
 
   typedef struct packed {
     logic        valid;
+    logic        predict_taken;  //from predictor
+    word_t       predict_target; //target if taken
     word_t       pc;
     word_t       pc_plus4;
     logic [31:0] instr;
@@ -37,6 +39,8 @@ package pipe_pkg;
   typedef struct packed {
     logic        valid;
     ctrl_t       ctrl;
+    logic        predict_taken;  //from predictor
+    word_t       predict_target; //target if taken
     word_t       pc;
     word_t       pc_plus4;
     word_t       imm;

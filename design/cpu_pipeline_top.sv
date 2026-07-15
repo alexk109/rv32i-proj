@@ -1,26 +1,5 @@
 // 5-stage pipelined RV32I core: IF / ID / EX / MEM / WB.
-//
-// STAGE 1 OF PHASE 2: hazards are DELIBERATELY NOT HANDLED.
-//
-// There is no forwarding, no stall, and no flush. This core is architecturally
-// WRONG and will fail the test suite. That is the point -- the failures are the
-// hazards, made visible.
-//
-// What is broken, and it is worth predicting each before looking at a waveform:
-//
-//   RAW      an instruction reading a register written by any of the previous 3
-//            instructions reads a STALE value, because the write has not reached
-//            the register file yet.
-//
-//   LOAD-USE a special case of RAW that forwarding alone will not fix either.
-//
-//   CONTROL  a branch resolves in EX, by which point the 2 instructions behind it
-//            have already been fetched -- and they execute. This core has, in
-//            effect, two branch delay slots it never asked for.
-//
-// The functional units are unchanged from the single-cycle core. Only the top is
-// re-plumbed: the units are now consumed from different stages, with the four
-// pipe_pkg registers between them.
+
 
 module cpu_pipeline_top
   import riscv_pkg::*;
@@ -46,7 +25,13 @@ module cpu_pipeline_top
     output logic [3:0]      rvfi_mem_rmask,
     output logic [3:0]      rvfi_mem_wmask,
     output logic [XLEN-1:0] rvfi_mem_rdata,
-    output logic [XLEN-1:0] rvfi_mem_wdata
+    output logic [XLEN-1:0] rvfi_mem_wdata,
+
+    // Cycle-level performance signals (not part of formal RVFI, which is
+    // retirement-only). These pulse per cycle so the testbench can attribute the
+    // gap between cycles and retired instructions to stalls vs flushes.
+    output logic            perf_stall,
+    output logic            perf_flush
 `endif
 );
 
@@ -55,30 +40,43 @@ module cpu_pipeline_top
   ex_mem_t ex_mem_d, ex_mem_q;
   mem_wb_t mem_wb_d, mem_wb_q;
 
+
+  //signals to update the branch predictor, driven from EX stage
+  logic            update_valid;
+  logic [XLEN-1:0] update_pc;
+  logic            update_taken;
+  logic [XLEN-1:0] update_target;
+  logic            update_mispred;
+
   // ======================= IF =========================================
 
   logic            stall;
 
-  //hazard detection: checks for load-use hazard
-  assign stall =  id_ex_q.valid && id_ex_q.ctrl.mem_read  // instr in EX is a load
-
-                   //but we need that value in ID, so we stall IF and ID for one cycle
-                  && ( ( id_ex_q.rd_addr == if_id_q.rs1 ) 
-                  || ( id_ex_q.rd_addr == if_id_q.rs2 ) )
-
-                  && id_ex_q.rd_addr != 0; //and not x0, which is always 0
-
-
-  //next PC logic
+  //next PC logic and prediction
   logic [XLEN-1:0] pc_q;
   logic [XLEN-1:0] pc_d;
   logic [XLEN-1:0] pc_plus4;
   logic [XLEN-1:0] if_instr;
   
   logic            flush;
+
+  logic            predict_taken;
+  logic [XLEN-1:0] predict_target;
+
   logic            ex_redirect; //redirect for flushing, if we predicted PC wrong
   logic [XLEN-1:0] ex_target;
 
+  
+  //hazard detection: checks for load-use hazard
+  assign stall =  id_ex_q.valid && id_ex_q.ctrl.mem_read  // instr in EX is a load
+                  && (id_ex_q.rd_addr != 5'd0)            // not x0
+
+                   //but we need that value in ID, so we stall IF and ID for one cycle
+                  && ( ( id_ctrl.uses_rs1 && (id_ex_q.rd_addr == if_id_q.instr[19:15]) )
+                    || ( id_ctrl.uses_rs2 && (id_ex_q.rd_addr == if_id_q.instr[24:20]) ) );
+
+
+  //next PC reg
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n)
       pc_q <= RESET_PC;
@@ -87,9 +85,31 @@ module cpu_pipeline_top
   
   end
 
+  //predictor
+  predictor predictor_i (
+  .clk             (clk),   // I 
+  .rst_n           (rst_n), // I
+
+  // ---- PREDICT: queried in IF, combinational -------------------------
+  .predict_pc      (pc_q),            // I: the PC being fetched in IF
+  .predict_taken   (predict_taken),   // O
+  .predict_target  (predict_target),  // O [XLEN-1:0]
+
+  // Updates from EX used to update the predictor state, not to compute the next PC
+  .update_valid    (update_valid),
+  .update_pc       (update_pc), 
+  .update_taken    (update_taken),
+  .update_target   (update_target), 
+  .update_mispred  (update_mispred)  
+);
+
   assign pc_plus4 = pc_q + 32'd4;
-  assign pc_d     = ex_redirect ? ex_target : pc_plus4; // redirect PC on branch/jump, otherwise increment
+  assign pc_d =      ex_redirect     ? ex_target         // EX correction — real branch from EX stage
+                   : predict_taken   ? predict_target    // predicted guess
+                   :                   pc_plus4;         // sequential 
+
   assign flush    = ex_redirect; // flush IF/ID register on branch/jump
+
 
   //instruction memory
   instr_mem instr_mem_i (
@@ -100,11 +120,13 @@ module cpu_pipeline_top
 
   //IF/ID pipeline register
   always_comb begin
-    if_id_d          = '0;
-    if_id_d.valid    = 1'b1;
-    if_id_d.pc       = pc_q;
-    if_id_d.pc_plus4 = pc_plus4;
-    if_id_d.instr    = if_instr;
+    if_id_d                = '0;
+    if_id_d.valid          = 1'b1;
+    if_id_d.predict_taken  = predict_taken;
+    if_id_d.predict_target = predict_target;
+    if_id_d.pc             = pc_q;
+    if_id_d.pc_plus4       = pc_plus4;
+    if_id_d.instr          = if_instr;
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -153,18 +175,20 @@ module cpu_pipeline_top
   );
 
   always_comb begin
-    id_ex_d          = '0;
-    id_ex_d.valid    = if_id_q.valid;
-    id_ex_d.ctrl     = id_ctrl;
-    id_ex_d.pc       = if_id_q.pc;
-    id_ex_d.pc_plus4 = if_id_q.pc_plus4;
-    id_ex_d.imm      = id_imm;
-    id_ex_d.rs1_data = id_rs1_data;
-    id_ex_d.rs2_data = id_rs2_data;
-    id_ex_d.rs1_addr = if_id_q.instr[19:15];
-    id_ex_d.rs2_addr = if_id_q.instr[24:20];
-    id_ex_d.rd_addr  = if_id_q.instr[11:7];
-    id_ex_d.instr    = if_id_q.instr;
+    id_ex_d                = '0;
+    id_ex_d.valid          = if_id_q.valid;
+    id_ex_d.ctrl           = id_ctrl;
+    id_ex_d.predict_taken  = if_id_q.predict_taken;
+    id_ex_d.predict_target = if_id_q.predict_target;
+    id_ex_d.pc             = if_id_q.pc;
+    id_ex_d.pc_plus4       = if_id_q.pc_plus4;
+    id_ex_d.imm            = id_imm;
+    id_ex_d.rs1_data       = id_rs1_data;
+    id_ex_d.rs2_data       = id_rs2_data;
+    id_ex_d.rs1_addr       = if_id_q.instr[19:15];
+    id_ex_d.rs2_addr       = if_id_q.instr[24:20];
+    id_ex_d.rd_addr        = if_id_q.instr[11:7];
+    id_ex_d.instr          = if_id_q.instr;
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -177,26 +201,36 @@ module cpu_pipeline_top
   end
 
   // ======================= EX =========================================
-
   
   //forwarding logic:
   // if the instruction in EX needs a register that is being written by MEM or WB, forward the value from the later stage
   logic [XLEN-1:0] ex_rs1;
   logic [XLEN-1:0] ex_rs2;
-  
-  assign ex_rs1 = (ex_mem_q.valid && ex_mem_q.ctrl.reg_write && (ex_mem_q.rd_addr == id_ex_q.rs1_addr) && (ex_mem_q.rd_addr != 5'd0)) ? ex_mem_q.alu_result : //forward from MEM stage
-                  (mem_wb_q.valid && mem_wb_q.ctrl.reg_write && (mem_wb_q.rd_addr == id_ex_q.rs1_addr) && (mem_wb_q.rd_addr != 5'd0)) ? wb_rd_data            //forward from WB stage
-                                                                                                                                      : id_ex_q.rs1_data;     //no forwarding, use value from ID stage
-
-  assign ex_rs2 = (ex_mem_q.valid && ex_mem_q.ctrl.reg_write && (ex_mem_q.rd_addr == id_ex_q.rs2_addr) && (ex_mem_q.rd_addr != 5'd0)) ? ex_mem_q.alu_result : //forward from MEM stage
-                  (mem_wb_q.valid && mem_wb_q.ctrl.reg_write && (mem_wb_q.rd_addr == id_ex_q.rs2_addr) && (mem_wb_q.rd_addr != 5'd0)) ? wb_rd_data            //forward from WB stage
-                                                                                                                                      : id_ex_q.rs2_data;     // no forward
-
 
   logic [XLEN-1:0] alu_input_a;
   logic [XLEN-1:0] alu_input_b;
   logic [XLEN-1:0] ex_alu_result;
   logic            ex_branch_taken;
+  logic            actual_taken; //prediction was correct or not
+  
+  assign ex_rs1 = (id_ex_q.ctrl.uses_rs1 && ex_mem_q.valid && ex_mem_q.ctrl.reg_write && (ex_mem_q.rd_addr == id_ex_q.rs1_addr) && (ex_mem_q.rd_addr != 5'd0)) ? ex_mem_q.alu_result : //forward from MEM stage
+                  (id_ex_q.ctrl.uses_rs1 && mem_wb_q.valid && mem_wb_q.ctrl.reg_write && (mem_wb_q.rd_addr == id_ex_q.rs1_addr) && (mem_wb_q.rd_addr != 5'd0)) ? wb_rd_data            //forward from WB stage
+                                                                                                                                                                : id_ex_q.rs1_data;     //no forwarding, use value from ID stage
+
+  assign ex_rs2 = (id_ex_q.ctrl.uses_rs2 && ex_mem_q.valid && ex_mem_q.ctrl.reg_write && (ex_mem_q.rd_addr == id_ex_q.rs2_addr) && (ex_mem_q.rd_addr != 5'd0)) ? ex_mem_q.alu_result : //forward from MEM stage
+                  (id_ex_q.ctrl.uses_rs2 && mem_wb_q.valid && mem_wb_q.ctrl.reg_write && (mem_wb_q.rd_addr == id_ex_q.rs2_addr) && (mem_wb_q.rd_addr != 5'd0)) ? wb_rd_data            //forward from WB stage
+                                                                                                                                                                : id_ex_q.rs2_data;     // no forward
+
+  assign actual_taken = ex_branch_taken || id_ex_q.ctrl.jump;
+ 
+ 
+  //update the predictor with the actual outcome of the branch/jump
+  assign update_valid   = id_ex_q.valid && (id_ex_q.ctrl.branch || id_ex_q.ctrl.jump);
+  assign update_pc      = id_ex_q.pc;
+  assign update_taken   = actual_taken;
+  assign update_target  = ex_next_pc;    //correct target from next_pc logic in EX stage
+  assign update_mispred = ex_redirect;   //prediction was wrong if we had to redirect
+
 
   always_comb begin
     case (id_ex_q.ctrl.alu_src_a)
@@ -237,10 +271,10 @@ module cpu_pipeline_top
     .pc_next      (ex_next_pc      )
   );
 
-  // Redirect whenever we branch or jump, and the next PC is not the sequential PC. 
-  // This is a misprediction, which will flush the IF/ID and ID/EX regs, and redirect PC
-  assign ex_redirect = id_ex_q.valid &&
-                       (id_ex_q.ctrl.jump || ex_branch_taken);
+  // Redirect for a mispredicted branch or jump.
+  assign ex_redirect = id_ex_q.valid && (
+                       (actual_taken != id_ex_q.predict_taken) ||                     // mispredicted branch
+                       (actual_taken && (ex_next_pc != id_ex_q.predict_target)));     // mispredicted target for taken branch/jump
 
   assign ex_target   = ex_next_pc;
 
@@ -381,6 +415,9 @@ module cpu_pipeline_top
   assign rvfi_mem_wmask = mem_wb_q.mem_wmask;
   assign rvfi_mem_rdata = mem_wb_q.mem_rdata;
   assign rvfi_mem_wdata = mem_wb_q.mem_wdata;
+
+  assign perf_stall = stall;
+  assign perf_flush = flush;
 
 `endif
 

@@ -27,3 +27,9 @@ lint_off -rule UNUSEDSIGNAL -file "*design/src/data_mem.sv" -match "*'rword_shif
 // in Phase 3E is what will read this bit. REMOVE THIS WAIVER THEN — if it is
 // still here after the trap unit exists, the trap unit is not wired up.
 lint_off -rule UNUSEDSIGNAL -file "*design/cpu_single_cycle_top.sv" -match "*'ctrl'*"
+
+// Predictor schemes all define module `predictor` (fixed, so the top's single
+// instantiation binds to whichever file the build selects) but live in files
+// named predictor_<scheme>.sv. That filename/module mismatch is the whole
+// selection mechanism, so the filename-match rule does not apply here.
+lint_off -rule DECLFILENAME -file "*design/src/predictors/*"

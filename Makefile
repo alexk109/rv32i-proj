@@ -16,10 +16,17 @@ RTL_F     := lint/cpu_rtl.f
 WAIVERS   := lint/waivers.vlt
 TOP       ?= cpu_single_cycle_top
 
+# Branch predictor scheme. Every scheme lives in design/src/predictor_<name>.sv
+# and defines a module named `predictor`, so exactly ONE is in the build at a
+# time — appended to the verilator command, not the shared filelist. The wildcard
+# keeps the build working before any predictor_*.sv exists.
+PREDICTOR ?= none
+PRED_SRC  := $(wildcard design/src/predictors/predictor_$(PREDICTOR).sv)
+
 VERIF     := verif
 PROGRAMS  := $(VERIF)/sim/programs
 RUNS      := $(VERIF)/sim/runs
-OBJ_DIR   := $(VERIF)/sim/obj_dir_$(TOP)
+OBJ_DIR   := $(VERIF)/sim/obj_dir_$(TOP)_$(PREDICTOR)
 TB_SRC    := $(VERIF)/tb_cpu.cpp
 SIM_BIN   := $(OBJ_DIR)/V$(TOP)
 
@@ -51,7 +58,7 @@ RVCFLAGS  := -march=rv32i -mabi=ilp32 -nostdlib -Ttext=0
 # nondeterministic failure, which is where reset bugs hide.
 SIMFLAGS  := --x-assign unique --x-initial unique
 
-.PHONY: all lint lint-verilator lint-verible lint-synth fmt fmt-check sim run dump regress rv32ui-fetch clean help
+.PHONY: all lint lint-verilator lint-verible lint-synth fmt fmt-check sim run dump diff diffall regress rv32ui-fetch clean help
 
 all: lint
 
@@ -60,11 +67,11 @@ lint: lint-verilator lint-verible
 
 ## lint-verilator: elaborate the whole core and check it (with RVFI)
 lint-verilator:
-	$(VERILATOR) --lint-only $(VFLAGS) $(WAIVERS) -f $(RTL_F) --top-module $(TOP)
+	$(VERILATOR) --lint-only $(VFLAGS) $(WAIVERS) -f $(RTL_F) $(PRED_SRC) --top-module $(TOP)
 
 ## lint-synth: elaborate WITHOUT RVFI — the config Phase 3C will actually synthesize
 lint-synth:
-	$(VERILATOR) --lint-only -Wall $(WAIVERS) -f $(RTL_F) --top-module $(TOP)
+	$(VERILATOR) --lint-only -Wall $(WAIVERS) -f $(RTL_F) $(PRED_SRC) --top-module $(TOP)
 
 ## lint-verible: style and naming rules, per-file
 lint-verible:
@@ -129,10 +136,10 @@ ifeq ($(TOP),cpu_pipeline_top)
   TBFLAGS := -CFLAGS -DPIPELINE
 endif
 
-$(SIM_BIN): $(RTL_SRCS) $(TB_SRC) $(WAIVERS)
+$(SIM_BIN): $(RTL_SRCS) $(PRED_SRC) $(TB_SRC) $(WAIVERS)
 	$(VERILATOR) $(VFLAGS) $(SIMFLAGS) $(WAIVERS) $(TBFLAGS) \
 	  --cc --exe --build --trace \
-	  -f $(RTL_F) --top-module $(TOP) \
+	  -f $(RTL_F) $(PRED_SRC) --top-module $(TOP) \
 	  --Mdir $(OBJ_DIR) $(abspath $(TB_SRC))
 
 ## run: run a program on the core, e.g. make run PROG=smoke RUN=phase1_smoke
@@ -145,6 +152,35 @@ run: $(SIM_BIN) $(RUN_DIR)/$(PROG).hex
 	@{ cat $(RUN_DIR)/$(PROG).hex; yes 00000000 | head -1024; } | head -1024 \
 	  > $(RUN_DIR)/data_mem_init.hex
 	cd $(RUN_DIR) && $(abspath $(SIM_BIN))
+
+#-----------------------------------------------------------------------------
+# Golden-model equivalence: run a program on BOTH cores and diff their
+# retirement streams. The single-cycle core is the reference. Identical streams
+# mean the pipeline commits the same architectural effects in the same order,
+# regardless of stalls/flushes. This catches pipeline-only bugs (a bad forward, a
+# missed flush) that a self-checking test can miss. It is also the exact shape
+# Spike co-simulation will take — swap single-cycle's log for Spike's.
+#-----------------------------------------------------------------------------
+
+DIFF_PROGS ?= smoke alu branch lui_auipc mem jump x0 arraysum bubblesort search statemachine
+
+## diff: run PROG on both cores and diff their retirement streams
+diff:
+	@$(MAKE) -s run TOP=cpu_single_cycle_top PROG=$(PROG) RUN=diff_$(PROG)_sc   >/dev/null 2>&1
+	@$(MAKE) -s run TOP=cpu_pipeline_top     PROG=$(PROG) RUN=diff_$(PROG)_pipe >/dev/null 2>&1
+	@if diff -q $(RUNS)/diff_$(PROG)_sc/retire.log $(RUNS)/diff_$(PROG)_pipe/retire.log >/dev/null; then \
+	  echo "  DIFF OK    $(PROG)"; \
+	else \
+	  echo "  DIFF FAIL  $(PROG)  (single-cycle vs pipeline retirement mismatch):"; \
+	  diff $(RUNS)/diff_$(PROG)_sc/retire.log $(RUNS)/diff_$(PROG)_pipe/retire.log | head -6; \
+	fi
+
+## diffall: equivalence-check every program in DIFF_PROGS
+diffall: sim
+	@$(MAKE) -s sim TOP=cpu_single_cycle_top >/dev/null 2>&1
+	@$(MAKE) -s sim TOP=cpu_pipeline_top     >/dev/null 2>&1
+	@echo "pipeline vs single-cycle (golden) — retirement equivalence:"
+	@for p in $(DIFF_PROGS); do $(MAKE) -s diff PROG=$$p; done
 
 #-----------------------------------------------------------------------------
 # riscv-tests (rv32ui)
