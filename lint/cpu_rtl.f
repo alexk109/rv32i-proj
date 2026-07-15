@@ -4,6 +4,7 @@
 
 design/pkg/riscv_pkg.sv
 design/pkg/ctrl_pkg.sv
+design/pkg/pipe_pkg.sv
 
 design/src/alu.sv
 design/src/imm_gen.sv
@@ -15,3 +16,4 @@ design/src/instr_mem.sv
 design/src/data_mem.sv
 
 design/cpu_single_cycle_top.sv
+design/cpu_pipeline_top.sv

@@ -14,12 +14,12 @@ RVOBJDUMP      := $(RISCV_PREFIX)objdump
 
 RTL_F     := lint/cpu_rtl.f
 WAIVERS   := lint/waivers.vlt
-TOP       := cpu_single_cycle_top
+TOP       ?= cpu_single_cycle_top
 
 VERIF     := verif
 PROGRAMS  := $(VERIF)/sim/programs
 RUNS      := $(VERIF)/sim/runs
-OBJ_DIR   := $(VERIF)/sim/obj_dir
+OBJ_DIR   := $(VERIF)/sim/obj_dir_$(TOP)
 TB_SRC    := $(VERIF)/tb_cpu.cpp
 SIM_BIN   := $(OBJ_DIR)/V$(TOP)
 
@@ -90,6 +90,17 @@ $(RUN_DIR)/%.elf: $(PROGRAMS)/%.S
 	@mkdir -p $(RUN_DIR)
 	$(RVCC) $(RVCFLAGS) -o $@ $<
 
+# C programs need crt0 (stack pointer, .bss zeroing, the call to main) and a link
+# script that packs .data right after .text -- the default one page-aligns it,
+# which would push it past the end of both memories.
+CLINK     := $(PROGRAMS)/link.ld
+CRT0      := $(PROGRAMS)/crt0.S
+RVCFLAGS_C := -march=rv32i -mabi=ilp32 -nostdlib -nostartfiles -O2 -T $(CLINK)
+
+$(RUN_DIR)/%.elf: $(PROGRAMS)/%.c $(CRT0) $(CLINK)
+	@mkdir -p $(RUN_DIR)
+	$(RVCC) $(RVCFLAGS_C) -o $@ $(CRT0) $<
+
 $(RUN_DIR)/%.bin: $(RUN_DIR)/%.elf
 	$(RVOBJCOPY) -O binary $< $@
 
@@ -112,8 +123,14 @@ dump: $(RUN_DIR)/$(PROG).elf
 ## sim: verilate + compile the testbench into an executable
 sim: $(SIM_BIN)
 
+# The TB includes a header named after the top module, so it must be told which
+# core it is being linked against.
+ifeq ($(TOP),cpu_pipeline_top)
+  TBFLAGS := -CFLAGS -DPIPELINE
+endif
+
 $(SIM_BIN): $(RTL_SRCS) $(TB_SRC) $(WAIVERS)
-	$(VERILATOR) $(VFLAGS) $(SIMFLAGS) $(WAIVERS) \
+	$(VERILATOR) $(VFLAGS) $(SIMFLAGS) $(WAIVERS) $(TBFLAGS) \
 	  --cc --exe --build --trace \
 	  -f $(RTL_F) --top-module $(TOP) \
 	  --Mdir $(OBJ_DIR) $(abspath $(TB_SRC))
@@ -125,7 +142,8 @@ $(SIM_BIN): $(RTL_SRCS) $(TB_SRC) $(WAIVERS)
 # rather than absent, so a run is reproducible.
 run: $(SIM_BIN) $(RUN_DIR)/$(PROG).hex
 	@cp $(RUN_DIR)/$(PROG).hex $(RUN_DIR)/instr_mem.hex
-	@yes 00000000 | head -1024 > $(RUN_DIR)/data_mem_init.hex
+	@{ cat $(RUN_DIR)/$(PROG).hex; yes 00000000 | head -1024; } | head -1024 \
+	  > $(RUN_DIR)/data_mem_init.hex
 	cd $(RUN_DIR) && $(abspath $(SIM_BIN))
 
 #-----------------------------------------------------------------------------
@@ -173,7 +191,7 @@ regress: $(SIM_BIN) rv32ui-fetch
 	    { echo "  BUILD-FAIL $$n"; fail=$$((fail+1)); continue; }; \
 	  $(RVOBJCOPY) -O binary $$d/$$n.elf $$d/$$n.bin; \
 	  od -An -tx4 -v $$d/$$n.bin | tr -s ' ' '\n' | grep . > $$d/instr_mem.hex; \
-	  cp $$d/instr_mem.hex $$d/data_mem_init.hex; \
+	  { cat $$d/instr_mem.hex; yes 00000000 | head -1024; } | head -1024 > $$d/data_mem_init.hex; \
 	  out=$$( (cd $$d && timeout 30 $(abspath $(SIM_BIN))) 2>&1 | grep -E '^(PASS|FAIL|ERROR)' | head -1); \
 	  case "$$out" in \
 	    PASS*) pass=$$((pass+1)) ;; \
@@ -184,7 +202,7 @@ regress: $(SIM_BIN) rv32ui-fetch
 	if [ $$fail -ne 0 ]; then printf "$$failed\n"; exit 1; fi
 
 clean:
-	rm -rf $(OBJ_DIR)
+	rm -rf $(VERIF)/sim/obj_dir_*
 	find $(RUNS) -mindepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
 	find $(RUNS) -type f ! -name '.gitkeep' -delete
 

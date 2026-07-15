@@ -89,13 +89,15 @@ module cpu_single_cycle_top
   // Register file
   ////////////////////////////
 
-  reg_file reg_file_i(
+  reg_file #(
+    .P_ENABLE_BYPASS (0) // bypass logic to prevent read-after-write hazards, disable for single cycle
+  )reg_file_i(
     .clk(clk),
     .rst_n(rst_n),
     .rs1_addr(instr[19:15]),
     .rs2_addr(instr[24:20]),
-    .rd_addr(instr[11:7]),
-    .rd_data(rd_data),
+    .wr_addr(instr[11:7]),
+    .wr_data(rd_data),
     .reg_write(ctrl.reg_write),
     .rs1_data(rs1_data),
     .rs2_data(rs2_data)

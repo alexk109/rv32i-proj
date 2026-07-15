@@ -7,21 +7,34 @@
 #include <verilated.h>
 #include <verilated_vcd_c.h>
 
-#include "Vcpu_single_cycle_top.h"
-#include "Vcpu_single_cycle_top___024root.h"  // needed to reach inside the model
+// The same harness drives either top. Verilator names the generated class after
+// the top module and mangles internal paths with __DOT__, so both have to be
+// selected at compile time. The Makefile passes -DPIPELINE when TOP is the
+// pipelined core.
+#ifdef PIPELINE
+  #include "Vcpu_pipeline_top.h"
+  #include "Vcpu_pipeline_top___024root.h"
+  typedef Vcpu_pipeline_top Vdut;
+  #define DUT_REGS rootp->cpu_pipeline_top__DOT__reg_file_i__DOT__regs
+#else
+  #include "Vcpu_single_cycle_top.h"
+  #include "Vcpu_single_cycle_top___024root.h"
+  typedef Vcpu_single_cycle_top Vdut;
+  #define DUT_REGS rootp->cpu_single_cycle_top__DOT__reg_file_i__DOT__regs
+#endif
 
 // A runaway branch (or a PC that never advances) will spin forever, because
 // next_pc closes a combinational loop back to the PC. Bound it.
 static const int MAX_CYCLES = 1000;
 
 static VerilatedContext* ctx = nullptr;
-static Vcpu_single_cycle_top* dut = nullptr;
+static Vdut* dut = nullptr;
 static VerilatedVcdC* trace = nullptr;
 
 
 //read regfile function
 static uint32_t read_reg(int i) {
-    return dut->rootp->cpu_single_cycle_top__DOT__reg_file_i__DOT__regs[i];
+    return dut->DUT_REGS[i];
 }
 
 
@@ -59,7 +72,7 @@ int main(int argc, char** argv) {
     ctx->traceEverOn(true);
 
     //instatiate DUT cpp model
-    dut = new Vcpu_single_cycle_top{ctx};
+    dut = new Vdut{ctx};
 
     //start tracing
     trace = new VerilatedVcdC;
