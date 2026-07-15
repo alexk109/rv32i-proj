@@ -16,6 +16,9 @@ package riscv_pkg;
 
   localparam word_t RESET_PC = 32'h0000_0000;  // PC value at reset
 
+  // Width for ghr
+  localparam int PRED_HIST_W = 6;
+
   //--------------------------------------------------------------------------
   // Opcodes  (instruction bits [6:0])  — the 11 RV32I base opcodes
   //--------------------------------------------------------------------------

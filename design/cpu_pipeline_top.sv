@@ -62,6 +62,7 @@ module cpu_pipeline_top
 
   logic            predict_taken;
   logic [XLEN-1:0] predict_target;
+  logic [PRED_HIST_W-1:0] predict_ghr;
 
   logic            ex_redirect; //redirect for flushing, if we predicted PC wrong
   logic [XLEN-1:0] ex_target;
@@ -95,13 +96,15 @@ module cpu_pipeline_top
   .predict_pc      (pc_q),            // I: the PC being fetched in IF
   .predict_taken   (predict_taken),   // O
   .predict_target  (predict_target),  // O [XLEN-1:0]
+  .predict_ghr     (predict_ghr),     // O: history snapshot used for this prediction
 
   // Updates from EX used to update the predictor state, not to compute the next PC
   .update_valid    (update_valid),
-  .update_pc       (update_pc), 
+  .update_pc       (update_pc),
   .update_taken    (update_taken),
-  .update_target   (update_target), 
-  .update_mispred  (update_mispred)  
+  .update_target   (update_target),
+  .update_mispred  (update_mispred),
+  .update_ghr      (id_ex_q.predict_ghr) // the resolving branch's fetch-time history
 );
 
   assign pc_plus4 = pc_q + 32'd4;
@@ -125,6 +128,7 @@ module cpu_pipeline_top
     if_id_d.valid          = 1'b1;
     if_id_d.predict_taken  = predict_taken;
     if_id_d.predict_target = predict_target;
+    if_id_d.predict_ghr    = predict_ghr;
     if_id_d.pc             = pc_q;
     if_id_d.pc_plus4       = pc_plus4;
     if_id_d.instr          = if_instr;
@@ -181,6 +185,7 @@ module cpu_pipeline_top
     id_ex_d.ctrl           = id_ctrl;
     id_ex_d.predict_taken  = if_id_q.predict_taken;
     id_ex_d.predict_target = if_id_q.predict_target;
+    id_ex_d.predict_ghr    = if_id_q.predict_ghr;
     id_ex_d.pc             = if_id_q.pc;
     id_ex_d.pc_plus4       = if_id_q.pc_plus4;
     id_ex_d.imm            = id_imm;

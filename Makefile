@@ -58,7 +58,7 @@ RVCFLAGS  := -march=rv32i -mabi=ilp32 -nostdlib -Ttext=0
 # nondeterministic failure, which is where reset bugs hide.
 SIMFLAGS  := --x-assign unique --x-initial unique
 
-.PHONY: all lint lint-verilator lint-verible lint-synth fmt fmt-check sim run dump diff diffall verify regress rv32ui-fetch clean help
+.PHONY: all lint lint-verilator lint-verible lint-synth fmt fmt-check sim run dump diff diffall verify stats regress rv32ui-fetch clean help
 
 all: lint
 
@@ -168,7 +168,7 @@ DIFF_PROGS ?= smoke alu branch lui_auipc mem jump x0 hazards arraysum bubblesort
 # timing, never architectural results. The JAL-link forwarding bug was invisible
 # with PREDICTOR=none and only appeared under btfn, which is exactly why `verify`
 # sweeps all of them.
-PREDICTORS ?= none btfn 2bit
+PREDICTORS ?= none btfn 2bit gshare
 
 ## diff: run PROG on both cores and diff retirement streams (pipeline uses PREDICTOR)
 #
@@ -200,6 +200,14 @@ verify:
 	  $(MAKE) -s diffall PREDICTOR=$$pred; \
 	  $(MAKE) -s regress TOP=cpu_pipeline_top PREDICTOR=$$pred | grep '^rv32ui'; \
 	done
+
+## stats: sweep every predictor x benchmark, print CPI + flush/instr tables
+#   make stats                          — all predictors, branch-heavy suite
+#   make stats PREDICTORS="none gshare" — a subset
+stats:
+	@python3 $(VERIF)/stats.py "$(PREDICTORS)" "$(STAT_PROGS)"
+
+STAT_PROGS ?= bubblesort search statemachine
 
 #-----------------------------------------------------------------------------
 # riscv-tests (rv32ui)

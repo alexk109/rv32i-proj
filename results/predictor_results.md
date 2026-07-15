@@ -19,6 +19,7 @@ architectural results.
 | none (not-taken)   |      1.660 |  1.454 |        1.413 |     **1.463** |
 | btfn (static)      |      1.337 |  1.009 |        1.167 |     **1.165** |
 | 2bit bimodal (PHT) |      1.256 |  1.011 |        1.070 |     **1.090** |
+| gshare (8-bit GHR) |      1.261 |  1.016 |        1.074 |     **1.094** |
 
 ## flush cycles per instruction (control-hazard cost, lower is better)
 
@@ -27,6 +28,7 @@ architectural results.
 | none (not-taken)   |      0.254 |  0.227 |        0.206 |     **0.219** |
 | btfn (static)      |      0.092 |  0.004 |        0.084 |     **0.069** |
 | 2bit bimodal (PHT) |      0.052 |  0.005 |        0.035 |     **0.032** |
+| gshare (8-bit GHR) |      0.054 |  0.008 |        0.037 |     **0.034** |
 
 ## Headline
 
@@ -57,11 +59,31 @@ destructively share two bits — worse than btfn on `search` (CPI 1.438). Splitt
 it into a per-PC table removed both: `search` recovered to 1.011 and the
 aggregate dropped below btfn.
 
+## gshare — correct, but only ties bimodal (an instructive result)
+
+gshare works (off the not-taken baseline, `verify` green), but it does **not**
+beat bimodal — even on `statemachine`, the correlated benchmark it exists for
+(1.074 vs 2bit's 1.070). The reason is the **non-speculative global history
+register**: the GHR only shifts at branch *resolve* (EX), so at *predict* time
+(IF) it lags by the pipeline depth — the last ~3 branch outcomes aren't in the
+history yet. But those most-recent outcomes are exactly what `statemachine`'s
+next branch is correlated with. gshare is reading stale history, so it can't
+capture the correlation it was built for.
+
+The fix is a **speculative GHR**: update the history at predict time with the
+*predicted* outcome, and roll it back on a misprediction (the flush already
+signals it). That removes the lag. It is the natural next step, and the point
+where gshare should finally pull ahead on `statemachine`.
+
+Getting a correctly-wired gshare that still ties bimodal is the real lesson:
+correct != better. The pipelining subtlety (carry the fetch-time history with the
+instruction) is necessary but not sufficient — the history also has to be *fresh*.
+
 ## Next
 
-- **gshare** — index the PHT with `pc XOR global_history`. Expected to beat
-  bimodal specifically on `statemachine`, whose branches are correlated (the next
-  outcome depends on branch history, which a per-PC-only counter cannot see).
-- **BTB + RAS** — needed for JALR targets (currently unpredictable) and for
-  correctly-predicted returns.
-- Table-size sweep (a `parameter` in the PHT) for a sensitivity row.
+- **Speculative GHR** with rollback on flush — should make gshare beat bimodal on
+  `statemachine`.
+- **History-length sweep** (`PRED_HIST_W`) once the predictor handles
+  `PRED_HIST_W < index width` (today it slices `update_ghr[index_width-1:0]`,
+  which needs the GHR to be at least index-width wide).
+- **BTB + RAS** — JALR targets (currently unpredictable) and returns.

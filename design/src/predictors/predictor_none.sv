@@ -18,7 +18,11 @@ module predictor
     input  logic [XLEN-1:0] update_pc,       // its PC
     input  logic            update_taken,    // its ACTUAL outcome
     input  logic [XLEN-1:0] update_target,   // its ACTUAL target
-    input  logic            update_mispred   // prediction was wrong (for stats/training)
+    input  logic            update_mispred,  // prediction was wrong (for stats/training)
+
+    // ---- history snapshot for gshare (this scheme has no history) --------
+    output logic [PRED_HIST_W-1:0] predict_ghr,   // history used for this prediction
+    input  logic [PRED_HIST_W-1:0] update_ghr     // fetch-time history, pipelined back
 );
 
     //always predicts not taken
@@ -26,10 +30,12 @@ module predictor
 
     assign predict_target = predict_pc + 4; // this is a don't care, since predict_taken is always 0, but it is required to be a valid value
 
+    assign predict_ghr = '0; // no history in this scheme
+
 
      // everything else is unused but tied off for lint
     logic _unused;
     assign _unused = |{clk, rst_n, predict_instr, predict_pc, update_valid, update_pc,
-                      update_taken, update_target, update_mispred};
+                      update_taken, update_target, update_mispred, update_ghr};
 
 endmodule

@@ -26,24 +26,26 @@ package pipe_pkg;
   import ctrl_pkg::*;
 
   typedef struct packed {
-    logic        valid;
-    logic        predict_taken;  //from predictor
-    word_t       predict_target; //target if taken
-    word_t       pc;
-    word_t       pc_plus4;
-    logic [31:0] instr;
+    logic                   valid;
+    logic                   predict_taken;  //from predictor
+    word_t                  predict_target; //target if taken
+    logic [PRED_HIST_W-1:0] predict_ghr;    //history snapshot used for this prediction
+    word_t                  pc;
+    word_t                  pc_plus4;
+    logic [31:0]            instr;
   } if_id_t;
 
   // rs1_addr/rs2_addr are not needed to execute anything. They are here because
   // the forwarding unit compares them against EX/MEM.rd_addr and MEM/WB.rd_addr.
   typedef struct packed {
-    logic        valid;
-    ctrl_t       ctrl;
-    logic        predict_taken;  //from predictor
-    word_t       predict_target; //target if taken
-    word_t       pc;
-    word_t       pc_plus4;
-    word_t       imm;
+    logic                   valid;
+    ctrl_t                  ctrl;
+    logic                   predict_taken;  //from predictor
+    word_t                  predict_target; //target if taken
+    logic [PRED_HIST_W-1:0] predict_ghr;    //history snapshot used for this prediction
+    word_t                  pc;
+    word_t                  pc_plus4;
+    word_t                  imm;
     word_t       rs1_data;
     word_t       rs2_data;
     regaddr_t    rs1_addr;
