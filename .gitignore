@@ -3,6 +3,17 @@ doc/*
 
 ## verilator build output
 verif/sim/obj_dir/
+verif/sim/obj_dir_cpu_pipeline_top/
+verif/sim/obj_dir_cpu_pipeline_top_2bit/
+verif/sim/obj_dir_cpu_pipeline_top_btfn/
+verif/sim/obj_dir_cpu_pipeline_top_gshare/
+verif/sim/obj_dir_cpu_pipeline_top_none/
+verif/sim/obj_dir_cpu_single_cycle_top/
+verif/sim/obj_dir_cpu_single_cycle_top_2bit/
+verif/sim/obj_dir_cpu_single_cycle_top_btfn/
+verif/sim/obj_dir_cpu_single_cycle_top_gshare/
+verif/sim/obj_dir_cpu_single_cycle_top_none/
+verif/sim/obj_dir_cpu_single_cycle_top_twobit/
 
 ## per-run artifacts: compiled programs, memory images, waveforms
 verif/sim/runs/**/*.elf
