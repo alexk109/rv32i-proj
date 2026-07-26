@@ -13,12 +13,32 @@ module cpu_pipeline_top
     output logic [XLEN-1:0] instr_out,
     output logic            halt
 
+`ifdef RISCV_FORMAL
+    ,
+    // Free variables owned by the formal harness (verif/formal/wrapper.sv) and
+    // routed down to the memories. They must originate outside the design because
+    // yosys-slang ignores (* anyseq *) and $anyseq, so an internally declared free
+    // value is an undriven wire whose readers can disagree.
+    input  logic [31:0]     formal_imem_data,   // word returned by a fetch
+    input  logic [XLEN-1:0] formal_dmem_rdata   // word returned by a data read
+`endif
+
 `ifdef RVFI
     ,
     output logic            rvfi_valid,
+    output logic [63:0]     rvfi_order,
     output logic [31:0]     rvfi_insn,
+    output logic            rvfi_trap,
+    output logic            rvfi_halt,
+    output logic            rvfi_intr,
+    output logic [1:0]      rvfi_mode,
+    output logic [1:0]      rvfi_ixl,
     output logic [XLEN-1:0] rvfi_pc_rdata,
     output logic [XLEN-1:0] rvfi_pc_wdata,
+    output logic [4:0]      rvfi_rs1_addr,
+    output logic [4:0]      rvfi_rs2_addr,
+    output logic [XLEN-1:0] rvfi_rs1_rdata,
+    output logic [XLEN-1:0] rvfi_rs2_rdata,
     output logic [4:0]      rvfi_rd_addr,
     output logic [XLEN-1:0] rvfi_rd_wdata,
     output logic [XLEN-1:0] rvfi_mem_addr,
@@ -67,7 +87,12 @@ module cpu_pipeline_top
   logic            ex_redirect; //redirect for flushing, if we predicted PC wrong
   logic [XLEN-1:0] ex_target;
 
-  
+  // Declared up here, ahead of first use, rather than down in the stage that
+  // produces them. SystemVerilog requires declaration before reference; Verilator
+  // tolerates the back-reference but stricter frontends (yosys-slang) reject it.
+  ctrl_t           id_ctrl;     // produced in ID, consumed by the stall term below
+  logic [XLEN-1:0] ex_next_pc;  // produced in EX, consumed by the predictor update
+
   //hazard detection: checks for load-use hazard
   assign stall =  id_ex_q.valid && id_ex_q.ctrl.mem_read  // instr in EX is a load
                   && (id_ex_q.rd_addr != 5'd0)            // not x0
@@ -119,6 +144,9 @@ module cpu_pipeline_top
   instr_mem instr_mem_i (
     .addr  (pc_q    ),
     .instr (if_instr)
+`ifdef RISCV_FORMAL
+    , .formal_instr (formal_imem_data)
+`endif
   );
 
 
@@ -145,7 +173,6 @@ module cpu_pipeline_top
 
   // ======================= ID =========================================
 
-  ctrl_t           id_ctrl;
   logic [XLEN-1:0] id_imm;
   logic [XLEN-1:0] id_rs1_data;
   logic [XLEN-1:0] id_rs2_data;
@@ -266,8 +293,6 @@ module cpu_pipeline_top
     .branch_taken (ex_branch_taken     )
   );
 
-  logic [XLEN-1:0] ex_next_pc;
-
   next_pc next_pc_i (
     .pc           (id_ex_q.pc      ),
     .pc_plus4     (id_ex_q.pc_plus4),
@@ -297,6 +322,10 @@ module cpu_pipeline_top
     ex_mem_d.rd_addr    = id_ex_q.rd_addr;
     ex_mem_d.next_pc    = ex_next_pc;
     ex_mem_d.instr      = id_ex_q.instr;
+    ex_mem_d.rs1_addr   = id_ex_q.rs1_addr;
+    ex_mem_d.rs2_addr   = id_ex_q.rs2_addr;
+    ex_mem_d.rs1_rdata  = ex_rs1;   // post-forwarding: what the ALU actually saw
+    ex_mem_d.rs2_rdata  = ex_rs2;
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -312,6 +341,7 @@ module cpu_pipeline_top
   assign mem_alu_result = (ex_mem_q.ctrl.result_sel == RESULT_PC4) ? ex_mem_q.pc_plus4 : ex_mem_q.alu_result; //forward the correct value to EX stage, either ALU result or PC+4 for JAL/JALR
   
   logic [XLEN-1:0] mem_rdata;
+  logic [XLEN-1:0] mem_rdata_raw;
 
   // gate with valid to prevent bubbles from touching memory
   logic mem_read_q;
@@ -331,7 +361,11 @@ module cpu_pipeline_top
     .mem_read  (mem_read_q         ),
     .mem_write (mem_write_q        ),
     .memsize   (ex_mem_q.ctrl.mem_size),
-    .rdata     (mem_rdata          )
+    .rdata     (mem_rdata          ),
+    .rdata_raw (mem_rdata_raw      )
+`ifdef RISCV_FORMAL
+    , .formal_word (formal_dmem_rdata)
+`endif
   );
 
    // RVFI outputs
@@ -377,6 +411,11 @@ module cpu_pipeline_top
     mem_wb_d.mem_rmask  = mem_rmask;
     mem_wb_d.mem_wmask  = mem_wmask;
     mem_wb_d.mem_wdata  = ex_mem_q.rs2_data << {ex_mem_q.alu_result[1:0], 3'b000};
+    mem_wb_d.rs1_addr   = ex_mem_q.rs1_addr;
+    mem_wb_d.rs2_addr   = ex_mem_q.rs2_addr;
+    mem_wb_d.rs1_rdata  = ex_mem_q.rs1_rdata;
+    mem_wb_d.rs2_rdata  = ex_mem_q.rs2_rdata;
+    mem_wb_d.mem_rdata_raw = mem_rdata_raw;
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -413,16 +452,47 @@ module cpu_pipeline_top
   logic rvfi_rd_written;
   assign rvfi_rd_written = wb_reg_write && (mem_wb_q.rd_addr != 5'd0);
 
+  // riscv-formal's spec modules report rs1/rs2 as x0 for instructions that read
+  // no source register (LUI, AUIPC, JAL), so gate the reported address AND data
+  // on uses_rs*. Reporting a stale address here fails insn_lui and friends.
+  logic rvfi_reads_rs1, rvfi_reads_rs2;
+  assign rvfi_reads_rs1 = mem_wb_q.ctrl.uses_rs1;
+  assign rvfi_reads_rs2 = mem_wb_q.ctrl.uses_rs2;
+
+  // Retirement counter. Must be monotonic and gap-free across retired
+  // instructions -- the multi-retirement checks (reg, pc_fwd, causal) use it to
+  // put two RVFI snapshots in program order.
+  logic [63:0] rvfi_order_q;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n)          rvfi_order_q <= 64'd0;
+    else if (rvfi_valid) rvfi_order_q <= rvfi_order_q + 64'd1;
+  end
+
   assign rvfi_valid     = mem_wb_q.valid;
+  assign rvfi_order     = rvfi_order_q;
   assign rvfi_insn      = mem_wb_q.instr;
   assign rvfi_pc_rdata  = mem_wb_q.pc;
   assign rvfi_pc_wdata  = mem_wb_q.next_pc;
+  assign rvfi_rs1_addr  = rvfi_reads_rs1 ? mem_wb_q.rs1_addr  : 5'd0;
+  assign rvfi_rs2_addr  = rvfi_reads_rs2 ? mem_wb_q.rs2_addr  : 5'd0;
+  assign rvfi_rs1_rdata = rvfi_reads_rs1 ? mem_wb_q.rs1_rdata : '0;
+  assign rvfi_rs2_rdata = rvfi_reads_rs2 ? mem_wb_q.rs2_rdata : '0;
   assign rvfi_rd_addr   = rvfi_rd_written ? mem_wb_q.rd_addr : 5'd0;
   assign rvfi_rd_wdata  = rvfi_rd_written ? wb_rd_data       : '0;
+
+  // This core has no CSRs, no privilege levels, no interrupts and no trap
+  // handling, so these are structural constants rather than real state. rvfi_trap
+  // stays 0 because the core never takes a trap -- see the note in
+  // verif/formal/checks.cfg about the `ill` check.
+  assign rvfi_trap      = 1'b0;
+  assign rvfi_halt      = 1'b0;
+  assign rvfi_intr      = 1'b0;
+  assign rvfi_mode      = 2'd3;  // M-mode
+  assign rvfi_ixl       = 2'd1;  // XLEN=32
   assign rvfi_mem_addr  = mem_wb_q.mem_addr;
   assign rvfi_mem_rmask = mem_wb_q.mem_rmask;
   assign rvfi_mem_wmask = mem_wb_q.mem_wmask;
-  assign rvfi_mem_rdata = mem_wb_q.mem_rdata;
+  assign rvfi_mem_rdata = mem_wb_q.mem_rdata_raw;
   assign rvfi_mem_wdata = mem_wb_q.mem_wdata;
 
   assign perf_stall = stall;

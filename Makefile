@@ -58,7 +58,7 @@ RVCFLAGS  := -march=rv32i -mabi=ilp32 -nostdlib -Ttext=0
 # nondeterministic failure, which is where reset bugs hide.
 SIMFLAGS  := --x-assign unique --x-initial unique
 
-.PHONY: all lint lint-verilator lint-verible lint-synth fmt fmt-check sim run dump diff diffall verify stats regress rv32ui-fetch clean help
+.PHONY: all lint lint-verilator lint-verible lint-synth fmt fmt-check sim run dump diff diffall verify stats regress rv32ui-fetch clean help formal-gen formal-run formal-redo formal-cover formal-status formal-status-all formal-clean
 
 all: lint
 
@@ -268,6 +268,69 @@ clean:
 	rm -rf $(VERIF)/sim/obj_dir_*
 	find $(RUNS) -mindepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
 	find $(RUNS) -type f ! -name '.gitkeep' -delete
+
+# ---------------------------------------------------------------------------
+# riscv-formal
+#
+# genchecks.py derives the core name from its working directory and basedir from
+# ../.., so it only runs from inside <riscv-formal>/cores/<name>/. The authored
+# files (checks.cfg, wrapper.sv) live here under verif/formal and are staged into
+# that tree; nothing under $(RISCV_FORMAL) is hand-edited.
+# ---------------------------------------------------------------------------
+RISCV_FORMAL ?= $(HOME)/projects/tools/riscv-formal
+FORMAL_CORE  := cpu_pipeline
+FORMAL_SRC   := $(VERIF)/formal
+FORMAL_DIR   := $(RISCV_FORMAL)/cores/$(FORMAL_CORE)
+
+## formal-gen: stage verif/formal into riscv-formal and generate the check set
+formal-gen:
+	@test -d $(RISCV_FORMAL) || { echo "riscv-formal not found at $(RISCV_FORMAL)"; exit 1; }
+	mkdir -p $(FORMAL_DIR)
+	cp $(FORMAL_SRC)/checks.cfg $(FORMAL_SRC)/wrapper.sv $(FORMAL_DIR)/
+	cd $(FORMAL_DIR) && python3 $(RISCV_FORMAL)/checks/genchecks.py
+
+## formal-run: run every generated check (override with CHECK=insn_add_ch0)
+#
+# Deliberately does NOT depend on formal-gen. genchecks.py rmtree's the whole
+# checks/ directory, so regenerating destroys every result -- including any check
+# still running. Run `make formal-gen` yourself after editing checks.cfg or the
+# wrapper; otherwise just re-run.
+formal-run:
+	@test -d $(FORMAL_DIR)/checks || { echo "no checks yet -- run 'make formal-gen' first"; exit 1; }
+	@if pgrep -f '[b]in/sby' >/dev/null; then \
+	  echo "a formal run is already in progress -- wait for it or kill it:"; \
+	  pgrep -af '[b]in/sby' | sed 's/^/  /'; exit 1; \
+	fi
+	@for d in $(FORMAL_DIR)/checks/*/; do \
+	  [ -e "$$d/status" ] || { echo "clearing interrupted run: $$(basename $$d)"; rm -rf "$$d"; }; \
+	done
+	# sby prints "Could not connect to jobserver" here -- harmless. sby has its own
+	# jobserver client and cannot join the one `make -j` creates; each sby run is a
+	# single task anyway, and make still runs the checks themselves in parallel.
+	$(MAKE) -C $(FORMAL_DIR)/checks -j $(shell nproc) $(CHECK)
+
+## formal-redo: discard a finished result and re-run it, e.g. make formal-redo CHECK=insn_lb_ch0
+formal-redo:
+	@test -n "$(CHECK)" || { echo "set CHECK=<name>, e.g. CHECK=insn_lb_ch0"; exit 1; }
+	rm -rf $(FORMAL_DIR)/checks/$(CHECK)
+	$(MAKE) formal-run CHECK=$(CHECK)/status
+
+## formal-cover: vacuity check only — must PASS or every other result is meaningless
+formal-cover:
+	@test -d $(FORMAL_DIR)/checks || { echo "no checks yet -- run 'make formal-gen' first"; exit 1; }
+	cd $(FORMAL_DIR)/checks && sby -f cover.sby
+
+## formal-status: verdicts, plus each failing assertion and its counterexample
+formal-status:
+	@python3 $(FORMAL_SRC)/status.py $(FORMAL_DIR)/checks
+
+## formal-status-all: as above, plus every individual check and its runtime
+formal-status-all:
+	@python3 $(FORMAL_SRC)/status.py $(FORMAL_DIR)/checks -v
+
+## formal-clean: drop the generated check tree
+formal-clean:
+	rm -rf $(FORMAL_DIR)
 
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## //'

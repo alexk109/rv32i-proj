@@ -56,6 +56,10 @@ package pipe_pkg;
 
   // rs2_data rides on: in EX it was an ALU operand, but its other consumer is
   // data_mem.wdata in MEM. Same value, two jobs, two stages.
+  // rs1_addr/rs2_addr and the post-forwarding rs1_rdata/rs2_rdata ride along from
+  // EX purely for RVFI. riscv-formal compares the values an instruction actually
+  // consumed against its reference model, so these must be the forwarded operands
+  // (ex_rs1/ex_rs2), not the possibly-stale values read in ID.
   typedef struct packed {
     logic        valid;
     ctrl_t       ctrl;
@@ -66,6 +70,10 @@ package pipe_pkg;
     regaddr_t    rd_addr;
     word_t       next_pc;
     logic [31:0] instr;
+    regaddr_t    rs1_addr;
+    regaddr_t    rs2_addr;
+    word_t       rs1_rdata;
+    word_t       rs2_rdata;
   } ex_mem_t;
 
   typedef struct packed {
@@ -82,6 +90,11 @@ package pipe_pkg;
     logic [3:0]  mem_rmask;
     logic [3:0]  mem_wmask;
     word_t       mem_wdata;
+    regaddr_t    rs1_addr;
+    regaddr_t    rs2_addr;
+    word_t       rs1_rdata;
+    word_t       rs2_rdata;
+    word_t       mem_rdata_raw;  // pre-extension word, for RVFI only
   } mem_wb_t;
 
 endpackage : pipe_pkg

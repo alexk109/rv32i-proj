@@ -28,6 +28,11 @@ lint_off -rule UNUSEDSIGNAL -file "*design/src/data_mem.sv" -match "*'rword_shif
 // still here after the trap unit exists, the trap unit is not wired up.
 lint_off -rule UNUSEDSIGNAL -file "*design/cpu_single_cycle_top.sv" -match "*'ctrl'*"
 
+// data_mem.rdata_raw exists for RVFI, which only the pipelined top reports. The
+// single-cycle core has no RVFI interface, so it leaves the port open on purpose
+// -- named-but-empty rather than omitted, so the pin list stays exhaustive.
+lint_off -rule PINCONNECTEMPTY -file "*design/cpu_single_cycle_top.sv"
+
 // Predictor schemes all define module `predictor` (fixed, so the top's single
 // instantiation binds to whichever file the build selects) but live in files
 // named predictor_<scheme>.sv. That filename/module mismatch is the whole

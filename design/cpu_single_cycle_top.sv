@@ -189,7 +189,8 @@ module cpu_single_cycle_top
   .memsize     ( ctrl.mem_size  ), // I [2:0] size and signedness for load
 
   //read data
-  .rdata       ( mem_rdata      )  // O [XLEN-1:0] data read from memory
+  .rdata       ( mem_rdata      ), // O [XLEN-1:0] data read from memory
+  .rdata_raw   (                )  // O unused here — RVFI-only, consumed by the pipelined top
   );
 
   // ------------------------ WB -------------------------------
