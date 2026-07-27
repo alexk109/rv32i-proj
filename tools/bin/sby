@@ -1,0 +1,15 @@
+#!/bin/sh
+# Watchdog around the real sby (tools/sby/bin/sby). Racing multiple engines
+# (FORMAL_ENGINES with more than one entry) sometimes leaves sby's process
+# hung after it has already written its result -- status file present,
+# "DONE" logged -- because it doesn't reliably reap the losing engine. That
+# leaves the job slot stuck forever under `make -j`, blocking every check
+# behind it.
+#
+# `timeout` here is the fix at the only layer that can't be fooled by the
+# internal hang: if sby doesn't exit on its own within SBY_WATCHDOG_SECS,
+# kill it. Its own [options] timeout in the .sby file should fire first in
+# the normal case; this is strictly a backstop.
+SECS="${SBY_WATCHDOG_SECS:-600}"
+REAL="$(dirname "$0")/../sby/bin/sby"
+exec timeout -k 10 "$SECS" "$REAL" "$@"

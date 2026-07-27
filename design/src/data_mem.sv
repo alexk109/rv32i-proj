@@ -25,17 +25,13 @@ module data_mem
     //read data
     output logic [XLEN-1:0] rdata,
 
-    // The untouched memory word at the aligned address, before byte selection and
-    // sign extension. RVFI reports this: riscv-formal's load specs do their own
-    // extraction (`rvfi_mem_rdata >> 8*(addr-spec_mem_addr)`), so handing them the
-    // extended `rdata` makes every LB/LH/LBU/LHU check fail.
+    // untouched word at the aligned address, pre-extension -- RVFI reports this,
+    // since the load specs do their own byte extraction from it
     output logic [XLEN-1:0] rdata_raw
 
 `ifdef RISCV_FORMAL
     ,
-    // The addressed memory word, supplied by the formal harness. See the note on
-    // instr_mem.formal_instr for why this cannot be a locally declared free
-    // variable under yosys-slang.
+    // addressed word, supplied by the formal harness -- see instr_mem.sv
     input  logic [XLEN-1:0] formal_word
 `endif
 
@@ -48,18 +44,15 @@ logic [1:0]                   addr_byte;  //byte address for memory array
 assign addr_word = addr[$clog2(DMEM_SIZE) + 1 : 2];
 assign addr_byte = addr[1:0];
 
-// The addressed word, before any byte selection. Both the extraction logic and
-// rdata_raw read it, so the extended result and the word RVFI reports can never
-// disagree about what was fetched.
+// addressed word before byte selection -- one signal feeds both rdata and
+// rdata_raw, so they can't disagree about what was read
 logic [XLEN-1:0] read_word;
 
 `ifdef RISCV_FORMAL
 
-// Formal drops the storage array entirely. 1024 words of state would dominate
-// the solver, and riscv-formal's load specs only check rd_wdata against the
-// rvfi_mem_rdata this module reports -- they never require store-to-load
-// coherence. Leaving the word free is the sound over-approximation, and is why
-// the rvfi_mem consistency check is not part of the generated check set.
+// no storage array under formal: 1024 words would dominate the solver, and
+// the load specs only check against what this module reports, never against
+// what a prior store wrote -- so the word can be free
 assign read_word = formal_word;
 
 wire _unused_formal_dmem = &{1'b0, clk, rst_n, wdata, mem_write};

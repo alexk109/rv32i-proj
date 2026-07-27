@@ -190,7 +190,7 @@ module cpu_single_cycle_top
 
   //read data
   .rdata       ( mem_rdata      ), // O [XLEN-1:0] data read from memory
-  .rdata_raw   (                )  // O unused here — RVFI-only, consumed by the pipelined top
+  .rdata_raw   (                )  // O unused here — RVFI-only
   );
 
   // ------------------------ WB -------------------------------

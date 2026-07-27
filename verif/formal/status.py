@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Summarize a riscv-formal check run.
 
-sby leaves two things per check: a one-line `status` file (`<verdict> <retcode>
-<seconds>`) and a summary file *named after the verdict* holding the failed
-assertion and trace paths. This walks both, resolves each failing assertion back
-to its source line, and groups failures by the property that broke -- which is
-what turns 16 red lines into three actionable buckets.
+sby leaves a one-line `status` file (`<verdict> <retcode> <seconds>`) and a
+summary file named after the verdict, holding the failed assertion and trace
+paths. This reads both, resolves each failure back to its source line, and
+groups checks by the property that broke.
 
 Usage: status.py <checks-dir> [-v]
 """
@@ -111,13 +110,14 @@ def main() -> int:
             print(f"  {verdict:5} {name:<24} {secs:>4}s  (rc={retcode})")
         print()
 
-    # A non-zero sby retcode means the TOOL failed, which is different from a
-    # property failing -- surface it, because it invalidates the result.
-    broken = [(n, rc) for n, v, rc, _, _ in rows if rc not in ("0", "?")]
+    # ERROR/CANCELLED mean the tool itself broke (build failure, crash), not
+    # that a property failed -- distinct from UNKNOWN (induction couldn't
+    # decide) or TIMEOUT (ran out of time), both normal outcomes to report as-is.
+    broken = [n for n, v, _, _, _ in rows if v in ("ERROR", "CANCELLED")]
     if broken:
-        print("TOOL ERRORS (result not trustworthy)\n")
-        for n, rc in broken:
-            print(f"  {n} (sby retcode {rc})")
+        print("TOOL ERRORS (these did not produce a real result)\n")
+        for n in broken:
+            print(f"  {n}")
         print()
 
     return 0

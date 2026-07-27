@@ -27,3 +27,11 @@ verif/sim/runs/**/*.log
 
 ## per-run artifacts
 verif/sim/riscv-tests/upstream/
+
+## formal: built by tools/setup.sh, not committed (tools/riscv-formal IS
+## committed -- it's vendored source, not a build product)
+tools/yosys-slang/
+tools/yices/
+tools/sby/
+tools/sby-src/
+tools/riscv-formal/cores/
