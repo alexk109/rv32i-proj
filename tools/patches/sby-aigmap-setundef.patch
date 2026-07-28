@@ -1,0 +1,14 @@
+--- /tmp/sby_core.orig.py	2026-07-26 11:38:03.041522942 -0700
++++ sbysrc/sby_core.py	2026-07-26 11:38:03.077521648 -0700
+@@ -1276,6 +1276,11 @@
+                 print("simplemap", file=f)
+                 print("dffunmap", file=f)
+                 print("aigmap", file=f)
++                # aigmap can leave literal x bits on don't-care nets, which
++                # write_aiger rejects ("Design contains 'x' or 'z' bits"). Every
++                # earlier setundef runs before aigmap, so it has to be redone here.
++                # -anyseq (not -zero) keeps it an over-approximation.
++                print("setundef -anyseq", file=f)
+                 print("opt_clean", file=f)
+                 print("stat", file=f)
+                 print(f"write_aiger -I -B -zinit -no-startoffset {'-vmap' if self.opt_aigvmap else '-map'} design_aiger.aim" +

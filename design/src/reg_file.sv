@@ -20,14 +20,11 @@ module reg_file
     input  logic            reg_write,
 
     // output to ALU / MEM
-    output logic [XLEN-1:0] rs1_data, 
+    output logic [XLEN-1:0] rs1_data,
     output logic [XLEN-1:0] rs2_data
-
 );
 
-
   logic [XLEN-1:0] regs [0:REG_COUNT-1]  /* verilator public_flat_rd */; // 32 x 32 register file
-
 
   // combinational read ports -- with bypass to prevent read-after-write hazard
   assign rs1_data = (P_ENABLE_BYPASS && ((rs1_addr == wr_addr) && reg_write && wr_addr != 5'd0)) ? wr_data : regs[rs1_addr];

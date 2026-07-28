@@ -58,7 +58,7 @@ RVCFLAGS  := -march=rv32i -mabi=ilp32 -nostdlib -Ttext=0
 # nondeterministic failure, which is where reset bugs hide.
 SIMFLAGS  := --x-assign unique --x-initial unique
 
-.PHONY: all lint lint-verilator lint-verible lint-synth fmt fmt-check sim run dump diff diffall verify stats regress rv32ui-fetch clean help
+.PHONY: all lint lint-verilator lint-verible lint-synth fmt fmt-check sim run dump diff diffall verify stats regress rv32ui-fetch clean help formal-setup formal-gen formal-run formal-redo formal-cover formal-status formal-status-all formal-clean
 
 all: lint
 
@@ -268,6 +268,113 @@ clean:
 	rm -rf $(VERIF)/sim/obj_dir_*
 	find $(RUNS) -mindepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
 	find $(RUNS) -type f ! -name '.gitkeep' -delete
+
+# ---------------------------------------------------------------------------
+# riscv-formal
+#
+# Everything under tools/ is either vendored (tools/riscv-formal) or built by
+# `make formal-setup` (tools/yosys-slang, tools/yices, tools/sby) -- nothing
+# this flow needs lives outside the repo. genchecks.py derives the core name
+# from its working directory, so it only runs from inside
+# <riscv-formal>/cores/<name>/; `make formal-gen` stages checks.cfg and
+# wrapper.sv there. Nothing under $(RISCV_FORMAL)/cores is hand-edited.
+# ---------------------------------------------------------------------------
+PROJECT_ROOT := $(CURDIR)
+TOOLS_DIR    := $(PROJECT_ROOT)/tools
+RISCV_FORMAL ?= $(TOOLS_DIR)/riscv-formal
+YOSYS_SLANG  ?= $(TOOLS_DIR)/yosys-slang/build/slang.so
+FORMAL_CORE  := cpu_pipeline
+FORMAL_SRC   := $(VERIF)/formal
+FORMAL_DIR   := $(RISCV_FORMAL)/cores/$(FORMAL_CORE)
+
+# tools/sby and tools/yices are built locally rather than assumed to be on the
+# system PATH -- this is what makes `make formal-run` work right after
+# `make formal-setup`, with no global install step. tools/bin comes first: it
+# holds a `sby` watchdog wrapper (see tools/bin/sby) that works around sby
+# occasionally not exiting after it has already raced multiple engines and
+# written its result -- without it, one stuck check hangs the whole -j sweep.
+export PATH := $(TOOLS_DIR)/bin:$(TOOLS_DIR)/sby/bin:$(TOOLS_DIR)/yices/bin:$(PATH)
+
+## formal-setup: build/download everything formal needs beyond yosys/verilator/z3
+formal-setup:
+	@bash tools/setup.sh
+
+# FORMAL_CFG picks which .cfg to generate from -- "checks" (the committed
+# result set) or "deep" (same properties at ~2x BMC depth, see deep.cfg).
+# genchecks emits one hardcoded engine and no timeout; engines.py rewrites the
+# generated .sby files afterwards so sby races everything in FORMAL_ENGINES
+# and takes the first conclusive answer -- when racing works, see below.
+FORMAL_CFG     ?= checks
+FORMAL_MODE    ?= bmc
+FORMAL_TIMEOUT ?= 300
+# Single engine by default: racing more than one under FORMAL_MODE=prove
+# reliably leaves sby's process alive after it has already written its result
+# (a reaping bug in how it tears down the losing engine -- the tools/bin/sby
+# watchdog bounds the damage, but every hung check still costs the full
+# SBY_WATCHDOG_SECS even though it finished computing in seconds). Racing
+# under bmc mode has been reliable; opt in for either mode with, e.g.:
+#   make formal-run FORMAL_ENGINES="smtbmc yices;smtbmc z3"
+#   make formal-run FORMAL_ENGINES="smtbmc yices;abc pdr"   # needs the sby patch, see README
+FORMAL_ENGINES ?= smtbmc yices
+FORMAL_CHECKS  := $(FORMAL_DIR)/$(FORMAL_CFG)
+# backstop for the watchdog wrapper -- see tools/bin/sby
+export SBY_WATCHDOG_SECS := $(shell echo $$(($(FORMAL_TIMEOUT) + 60)))
+
+## formal-gen: stage verif/formal into riscv-formal and generate the check set
+formal-gen:
+	@test -f $(YOSYS_SLANG) || { echo "yosys-slang not built -- run 'make formal-setup' first"; exit 1; }
+	mkdir -p $(FORMAL_DIR)
+	cp $(FORMAL_SRC)/wrapper.sv $(FORMAL_DIR)/
+	sed -e 's/^mode .*/mode $(FORMAL_MODE)/' \
+	    -e 's|@@ROOT@@|$(PROJECT_ROOT)|g' \
+	    -e 's|@@SLANG@@|$(YOSYS_SLANG)|g' \
+	    $(FORMAL_SRC)/$(FORMAL_CFG).cfg > $(FORMAL_DIR)/$(FORMAL_CFG).cfg
+	cd $(FORMAL_DIR) && python3 $(RISCV_FORMAL)/checks/genchecks.py $(FORMAL_CFG)
+	@python3 $(FORMAL_SRC)/engines.py $(FORMAL_CHECKS) \
+	  --timeout $(FORMAL_TIMEOUT) --engines "$(FORMAL_ENGINES)"
+
+## formal-run: run every generated check (override with CHECK=insn_add_ch0)
+#
+# Deliberately does NOT depend on formal-gen: genchecks.py rmtree's the whole
+# output directory, so regenerating destroys every result, including a check
+# still running. Run `make formal-gen` yourself after editing checks.cfg or
+# the wrapper; otherwise just re-run.
+formal-run:
+	@test -d $(FORMAL_CHECKS) || { echo "no checks yet -- run 'make formal-gen' first"; exit 1; }
+	@if pgrep -f '[b]in/sby' >/dev/null; then \
+	  echo "a formal run is already in progress -- wait for it or kill it:"; \
+	  pgrep -af '[b]in/sby' | sed 's/^/  /'; exit 1; \
+	fi
+	@for d in $(FORMAL_CHECKS)/*/; do \
+	  [ -e "$$d/status" ] || { echo "clearing interrupted run: $$(basename $$d)"; rm -rf "$$d"; }; \
+	done
+	# sby prints "Could not connect to jobserver" here -- harmless, sby has its
+	# own jobserver client and can't join make's. -k: one UNKNOWN or FAIL (both
+	# common under FORMAL_MODE=prove) must not stop the rest of the sweep.
+	$(MAKE) -k -C $(FORMAL_CHECKS) -j $(shell nproc) $(CHECK)
+
+## formal-redo: discard a finished result and re-run it, e.g. make formal-redo CHECK=insn_lb_ch0
+formal-redo:
+	@test -n "$(CHECK)" || { echo "set CHECK=<name>, e.g. CHECK=insn_lb_ch0"; exit 1; }
+	rm -rf $(FORMAL_CHECKS)/$(CHECK)
+	$(MAKE) formal-run CHECK=$(CHECK)/status
+
+## formal-cover: vacuity check only — must PASS or every other result is meaningless
+formal-cover:
+	@test -d $(FORMAL_CHECKS) || { echo "no checks yet -- run 'make formal-gen' first"; exit 1; }
+	cd $(FORMAL_CHECKS) && sby -f cover.sby
+
+## formal-status: verdicts, plus each failing assertion and its counterexample
+formal-status:
+	@python3 $(FORMAL_SRC)/status.py $(FORMAL_CHECKS)
+
+## formal-status-all: as above, plus every individual check and its runtime
+formal-status-all:
+	@python3 $(FORMAL_SRC)/status.py $(FORMAL_CHECKS) -v
+
+## formal-clean: drop the generated check tree (both checks/ and deep/)
+formal-clean:
+	rm -rf $(FORMAL_DIR)
 
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## //'

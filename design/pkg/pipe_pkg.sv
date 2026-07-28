@@ -1,25 +1,9 @@
-//============================================================================
-// pipe_pkg.sv
-//
-// The four pipeline-register bundles. One struct per stage boundary.
-//
-// Grouping each boundary into a single struct is what makes stall and flush
-// one-liners later:
-//
-//   if      (!rst_n) id_ex_q <= '0;      // reset
-//   else if (flush)  id_ex_q <= '0;      // insert a bubble
-//   else if (!stall) id_ex_q <= id_ex_d; // advance
-//   // else: hold -- a stall is literally "do not update"
-//
-// Resetting to '0 clears ctrl, which clears every commit signal (reg_write,
-// mem_write, branch, jump, halt). So a bubble, a flushed instruction, and the
-// garbage in the pipe at reset are all architecturally inert by construction --
-// the same discipline the decoder uses.
-//
-// The `valid` bit says "a real instruction occupies this stage". It is 0 during
-// the fill after reset, 0 in a bubble, and 0 in a flushed slot. The valid bit at
-// the WB boundary is rvfi_valid, and it is what CPI counts.
-//============================================================================
+// The four pipeline-register bundles, one struct per stage boundary. Grouping
+// each boundary into a struct makes reset/flush/stall a one-liner:
+// `if (!rst_n || flush) q <= '0; else if (!stall) q <= d;` -- and resetting to
+// '0 clears ctrl along with everything else, so a bubble, a flushed slot, and
+// reset garbage are all architecturally inert for free. `valid` marks a real
+// instruction in that stage; at the WB boundary it's rvfi_valid.
 package pipe_pkg;
 
   import riscv_pkg::*;
@@ -54,8 +38,9 @@ package pipe_pkg;
     logic [31:0] instr;
   } id_ex_t;
 
-  // rs2_data rides on: in EX it was an ALU operand, but its other consumer is
-  // data_mem.wdata in MEM. Same value, two jobs, two stages.
+  // rs2_data rides on: an ALU operand in EX, then data_mem.wdata in MEM.
+  // rs1/rs2 addr+rdata ride along purely for RVFI, and must be the
+  // post-forwarding values (ex_rs1/ex_rs2) -- what the instruction actually used.
   typedef struct packed {
     logic        valid;
     ctrl_t       ctrl;
@@ -66,6 +51,11 @@ package pipe_pkg;
     regaddr_t    rd_addr;
     word_t       next_pc;
     logic [31:0] instr;
+    regaddr_t    rs1_addr;
+    regaddr_t    rs2_addr;
+    word_t       rs1_rdata;
+    word_t       rs2_rdata;
+    logic        trap;         // misaligned access/target, detected in EX
   } ex_mem_t;
 
   typedef struct packed {
@@ -82,6 +72,12 @@ package pipe_pkg;
     logic [3:0]  mem_rmask;
     logic [3:0]  mem_wmask;
     word_t       mem_wdata;
+    regaddr_t    rs1_addr;
+    regaddr_t    rs2_addr;
+    word_t       rs1_rdata;
+    word_t       rs2_rdata;
+    word_t       mem_rdata_raw;  // pre-extension word, for RVFI only
+    logic        trap;           // rides to WB so the trap commits in order
   } mem_wb_t;
 
 endpackage : pipe_pkg

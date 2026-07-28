@@ -13,12 +13,30 @@ module cpu_pipeline_top
     output logic [XLEN-1:0] instr_out,
     output logic            halt
 
+`ifdef RISCV_FORMAL
+    ,
+    // Free variables owned by the formal harness (verif/formal/wrapper.sv), fed
+    // in rather than declared locally -- see instr_mem.sv for why.
+    input  logic [31:0]     formal_imem_data,   // word returned by a fetch
+    input  logic [XLEN-1:0] formal_dmem_rdata   // word returned by a data read
+`endif
+
 `ifdef RVFI
     ,
     output logic            rvfi_valid,
+    output logic [63:0]     rvfi_order,
     output logic [31:0]     rvfi_insn,
+    output logic            rvfi_trap,
+    output logic            rvfi_halt,
+    output logic            rvfi_intr,
+    output logic [1:0]      rvfi_mode,
+    output logic [1:0]      rvfi_ixl,
     output logic [XLEN-1:0] rvfi_pc_rdata,
     output logic [XLEN-1:0] rvfi_pc_wdata,
+    output logic [4:0]      rvfi_rs1_addr,
+    output logic [4:0]      rvfi_rs2_addr,
+    output logic [XLEN-1:0] rvfi_rs1_rdata,
+    output logic [XLEN-1:0] rvfi_rs2_rdata,
     output logic [4:0]      rvfi_rd_addr,
     output logic [XLEN-1:0] rvfi_rd_wdata,
     output logic [XLEN-1:0] rvfi_mem_addr,
@@ -27,9 +45,8 @@ module cpu_pipeline_top
     output logic [XLEN-1:0] rvfi_mem_rdata,
     output logic [XLEN-1:0] rvfi_mem_wdata,
 
-    // Cycle-level performance signals (not part of formal RVFI, which is
-    // retirement-only). These pulse per cycle so the testbench can attribute the
-    // gap between cycles and retired instructions to stalls vs flushes.
+    // per-cycle, not retirement-only like RVFI -- lets the testbench tell a
+    // stall cycle from a flush cycle
     output logic            perf_stall,
     output logic            perf_flush
 `endif
@@ -67,7 +84,10 @@ module cpu_pipeline_top
   logic            ex_redirect; //redirect for flushing, if we predicted PC wrong
   logic [XLEN-1:0] ex_target;
 
-  
+  // declared ahead of first use (needed by stricter SV frontends, not just Verilator)
+  ctrl_t           id_ctrl;     // produced in ID, used by the stall term below
+  logic [XLEN-1:0] ex_next_pc;  // produced in EX, used by the predictor update
+
   //hazard detection: checks for load-use hazard
   assign stall =  id_ex_q.valid && id_ex_q.ctrl.mem_read  // instr in EX is a load
                   && (id_ex_q.rd_addr != 5'd0)            // not x0
@@ -119,6 +139,9 @@ module cpu_pipeline_top
   instr_mem instr_mem_i (
     .addr  (pc_q    ),
     .instr (if_instr)
+`ifdef RISCV_FORMAL
+    , .formal_instr (formal_imem_data)
+`endif
   );
 
 
@@ -145,7 +168,6 @@ module cpu_pipeline_top
 
   // ======================= ID =========================================
 
-  ctrl_t           id_ctrl;
   logic [XLEN-1:0] id_imm;
   logic [XLEN-1:0] id_rs1_data;
   logic [XLEN-1:0] id_rs2_data;
@@ -217,12 +239,14 @@ module cpu_pipeline_top
   logic [XLEN-1:0] alu_input_a;
   logic [XLEN-1:0] alu_input_b;
   
-  assign ex_rs1 = (id_ex_q.ctrl.uses_rs1 && ex_mem_q.valid && ex_mem_q.ctrl.reg_write && (ex_mem_q.rd_addr == id_ex_q.rs1_addr) && (ex_mem_q.rd_addr != 5'd0)) ? mem_alu_result :         //forward from MEM stage
-                  (id_ex_q.ctrl.uses_rs1 && mem_wb_q.valid && mem_wb_q.ctrl.reg_write && (mem_wb_q.rd_addr == id_ex_q.rs1_addr) && (mem_wb_q.rd_addr != 5'd0)) ? wb_rd_data            //forward from WB stage
+  // !trap matters as much as reg_write: a trapping instruction never writes
+  // its rd, so forwarding from it would hand out an uncommitted value
+  assign ex_rs1 = (id_ex_q.ctrl.uses_rs1 && ex_mem_q.valid && ex_mem_q.ctrl.reg_write && !ex_mem_q.trap && (ex_mem_q.rd_addr == id_ex_q.rs1_addr) && (ex_mem_q.rd_addr != 5'd0)) ? mem_alu_result :         //forward from MEM stage
+                  (id_ex_q.ctrl.uses_rs1 && mem_wb_q.valid && mem_wb_q.ctrl.reg_write && !mem_wb_q.trap && (mem_wb_q.rd_addr == id_ex_q.rs1_addr) && (mem_wb_q.rd_addr != 5'd0)) ? wb_rd_data            //forward from WB stage
                                                                                                                                                                 : id_ex_q.rs1_data;    //no forwarding, use value from ID stage
 
-  assign ex_rs2 = (id_ex_q.ctrl.uses_rs2 && ex_mem_q.valid && ex_mem_q.ctrl.reg_write && (ex_mem_q.rd_addr == id_ex_q.rs2_addr) && (ex_mem_q.rd_addr != 5'd0)) ? mem_alu_result :         //forward from MEM stage
-                  (id_ex_q.ctrl.uses_rs2 && mem_wb_q.valid && mem_wb_q.ctrl.reg_write && (mem_wb_q.rd_addr == id_ex_q.rs2_addr) && (mem_wb_q.rd_addr != 5'd0)) ? wb_rd_data            //forward from WB stage
+  assign ex_rs2 = (id_ex_q.ctrl.uses_rs2 && ex_mem_q.valid && ex_mem_q.ctrl.reg_write && !ex_mem_q.trap && (ex_mem_q.rd_addr == id_ex_q.rs2_addr) && (ex_mem_q.rd_addr != 5'd0)) ? mem_alu_result :         //forward from MEM stage
+                  (id_ex_q.ctrl.uses_rs2 && mem_wb_q.valid && mem_wb_q.ctrl.reg_write && !mem_wb_q.trap && (mem_wb_q.rd_addr == id_ex_q.rs2_addr) && (mem_wb_q.rd_addr != 5'd0)) ? wb_rd_data            //forward from WB stage
                                                                                                                                                                 : id_ex_q.rs2_data;    // no forward
 
   //prediction signals and logic back to ID
@@ -231,13 +255,47 @@ module cpu_pipeline_top
   logic            actual_taken; //prediction was correct or not
 
   assign actual_taken = ex_branch_taken || id_ex_q.ctrl.jump;
- 
+
+  // misaligned data access, and misaligned branch/jump targets (no C extension,
+  // so targets must be 4-byte aligned) both resolve here in EX. No CSRs to
+  // record mepc/mcause and no handler yet, so a trap just commits nothing and
+  // falls through to pc+4 -- detect and suppress, not a real trap vector.
+  logic ex_trap_mem;   // load/store address misaligned
+  logic ex_trap_pc;    // branch/jump target misaligned
+  logic ex_trap;
+
+  always_comb begin
+    ex_trap_mem = 1'b0;
+    if (id_ex_q.ctrl.mem_read || id_ex_q.ctrl.mem_write) begin
+      case (id_ex_q.ctrl.mem_size)
+        F3_LH, F3_LHU, F3_SH: ex_trap_mem =  ex_alu_result[0];
+        F3_LW, F3_SW:         ex_trap_mem = |ex_alu_result[1:0];
+        default:              ex_trap_mem = 1'b0;   // byte access is never misaligned
+      endcase
+    end
+  end
+
+  // Compared against ex_next_pc, not the immediate: the spec models check the
+  // PC the instruction actually resolves to, so a NOT-taken branch is judged on
+  // pc+4 (and only traps if the PC itself was already misaligned).
+  assign ex_trap_pc = (id_ex_q.ctrl.branch || id_ex_q.ctrl.jump) && |ex_next_pc[1:0];
+
+  assign ex_trap = id_ex_q.valid && (ex_trap_mem || ex_trap_pc);
+
+  // a trapping branch must not jump to its bad target -- its architectural
+  // next PC is pc+4, same as rvfi_pc_wdata has to report
+  logic            eff_taken;
+  logic [XLEN-1:0] ex_next_pc_arch;
+
+  assign eff_taken       = actual_taken && !ex_trap;
+  assign ex_next_pc_arch = eff_taken ? ex_next_pc : id_ex_q.pc_plus4;
+
   //update the predictor with the actual outcome of the branch/jump
   assign update_valid   = id_ex_q.valid && (id_ex_q.ctrl.branch || id_ex_q.ctrl.jump);
   assign update_pc      = id_ex_q.pc;
-  assign update_taken   = actual_taken;
-  assign update_target  = ex_next_pc;    //correct target from next_pc logic in EX stage
-  assign update_mispred = ex_redirect;   //prediction was wrong if we had to redirect
+  assign update_taken   = eff_taken;
+  assign update_target  = ex_next_pc_arch;  //correct target from next_pc logic in EX stage
+  assign update_mispred = ex_redirect;      //prediction was wrong if we had to redirect
 
 
   always_comb begin
@@ -266,8 +324,6 @@ module cpu_pipeline_top
     .branch_taken (ex_branch_taken     )
   );
 
-  logic [XLEN-1:0] ex_next_pc;
-
   next_pc next_pc_i (
     .pc           (id_ex_q.pc      ),
     .pc_plus4     (id_ex_q.pc_plus4),
@@ -279,12 +335,13 @@ module cpu_pipeline_top
     .pc_next      (ex_next_pc      )
   );
 
-  // Redirect for a mispredicted branch or jump.
+  // eff_taken, not actual_taken: a predicted-taken branch to a misaligned
+  // target is now mispredicted too, and IF must steer back to pc+4
   assign ex_redirect = id_ex_q.valid && (
-                       (actual_taken != id_ex_q.predict_taken) ||                     // mispredicted branch
-                       (actual_taken && (ex_next_pc != id_ex_q.predict_target)));     // mispredicted target for taken branch/jump
+                       (eff_taken != id_ex_q.predict_taken) ||                        // mispredicted branch
+                       (eff_taken && (ex_next_pc != id_ex_q.predict_target)));        // mispredicted target for taken branch/jump
 
-  assign ex_target   = ex_next_pc;
+  assign ex_target   = ex_next_pc_arch;
 
   always_comb begin
     ex_mem_d            = '0;
@@ -295,8 +352,13 @@ module cpu_pipeline_top
     ex_mem_d.alu_result = ex_alu_result;
     ex_mem_d.rs2_data   = ex_rs2;
     ex_mem_d.rd_addr    = id_ex_q.rd_addr;
-    ex_mem_d.next_pc    = ex_next_pc;
+    ex_mem_d.next_pc    = ex_next_pc_arch;
     ex_mem_d.instr      = id_ex_q.instr;
+    ex_mem_d.rs1_addr   = id_ex_q.rs1_addr;
+    ex_mem_d.rs2_addr   = id_ex_q.rs2_addr;
+    ex_mem_d.rs1_rdata  = ex_rs1;   // post-forwarding: what the ALU actually saw
+    ex_mem_d.rs2_rdata  = ex_rs2;
+    ex_mem_d.trap       = ex_trap;
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -312,13 +374,16 @@ module cpu_pipeline_top
   assign mem_alu_result = (ex_mem_q.ctrl.result_sel == RESULT_PC4) ? ex_mem_q.pc_plus4 : ex_mem_q.alu_result; //forward the correct value to EX stage, either ALU result or PC+4 for JAL/JALR
   
   logic [XLEN-1:0] mem_rdata;
+  logic [XLEN-1:0] mem_rdata_raw;
 
   // gate with valid to prevent bubbles from touching memory
   logic mem_read_q;
   logic mem_write_q;
 
-  assign mem_read_q  = ex_mem_q.valid && ex_mem_q.ctrl.mem_read;
-  assign mem_write_q = ex_mem_q.valid && ex_mem_q.ctrl.mem_write;
+  // !trap: a misaligned access must never reach memory, or the trap is
+  // precise on paper while memory has already been touched
+  assign mem_read_q  = ex_mem_q.valid && ex_mem_q.ctrl.mem_read  && !ex_mem_q.trap;
+  assign mem_write_q = ex_mem_q.valid && ex_mem_q.ctrl.mem_write && !ex_mem_q.trap;
 
   data_mem #(
     .DMEM_SIZE (1024                ),
@@ -331,7 +396,11 @@ module cpu_pipeline_top
     .mem_read  (mem_read_q         ),
     .mem_write (mem_write_q        ),
     .memsize   (ex_mem_q.ctrl.mem_size),
-    .rdata     (mem_rdata          )
+    .rdata     (mem_rdata          ),
+    .rdata_raw (mem_rdata_raw      )
+`ifdef RISCV_FORMAL
+    , .formal_word (formal_dmem_rdata)
+`endif
   );
 
    // RVFI outputs
@@ -377,6 +446,12 @@ module cpu_pipeline_top
     mem_wb_d.mem_rmask  = mem_rmask;
     mem_wb_d.mem_wmask  = mem_wmask;
     mem_wb_d.mem_wdata  = ex_mem_q.rs2_data << {ex_mem_q.alu_result[1:0], 3'b000};
+    mem_wb_d.rs1_addr   = ex_mem_q.rs1_addr;
+    mem_wb_d.rs2_addr   = ex_mem_q.rs2_addr;
+    mem_wb_d.rs1_rdata  = ex_mem_q.rs1_rdata;
+    mem_wb_d.rs2_rdata  = ex_mem_q.rs2_rdata;
+    mem_wb_d.mem_rdata_raw = mem_rdata_raw;
+    mem_wb_d.trap       = ex_mem_q.trap;
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -396,7 +471,7 @@ module cpu_pipeline_top
     endcase
   end
 
-  assign wb_reg_write = mem_wb_q.valid && mem_wb_q.ctrl.reg_write;
+  assign wb_reg_write = mem_wb_q.valid && mem_wb_q.ctrl.reg_write && !mem_wb_q.trap;
 
   // ------------------------ outputs -----------------------------------
 
@@ -413,16 +488,42 @@ module cpu_pipeline_top
   logic rvfi_rd_written;
   assign rvfi_rd_written = wb_reg_write && (mem_wb_q.rd_addr != 5'd0);
 
+  // instructions that read no source register (LUI, AUIPC, JAL) must report x0,
+  // not whatever stale rs*_addr happened to be decoded
+  logic rvfi_reads_rs1, rvfi_reads_rs2;
+  assign rvfi_reads_rs1 = mem_wb_q.ctrl.uses_rs1;
+  assign rvfi_reads_rs2 = mem_wb_q.ctrl.uses_rs2;
+
+  // retirement counter, must stay gap-free -- the multi-retirement checks
+  // (reg, pc_fwd, causal) use it to order two RVFI snapshots
+  logic [63:0] rvfi_order_q;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n)          rvfi_order_q <= 64'd0;
+    else if (rvfi_valid) rvfi_order_q <= rvfi_order_q + 64'd1;
+  end
+
   assign rvfi_valid     = mem_wb_q.valid;
+  assign rvfi_order     = rvfi_order_q;
   assign rvfi_insn      = mem_wb_q.instr;
   assign rvfi_pc_rdata  = mem_wb_q.pc;
   assign rvfi_pc_wdata  = mem_wb_q.next_pc;
+  assign rvfi_rs1_addr  = rvfi_reads_rs1 ? mem_wb_q.rs1_addr  : 5'd0;
+  assign rvfi_rs2_addr  = rvfi_reads_rs2 ? mem_wb_q.rs2_addr  : 5'd0;
+  assign rvfi_rs1_rdata = rvfi_reads_rs1 ? mem_wb_q.rs1_rdata : '0;
+  assign rvfi_rs2_rdata = rvfi_reads_rs2 ? mem_wb_q.rs2_rdata : '0;
   assign rvfi_rd_addr   = rvfi_rd_written ? mem_wb_q.rd_addr : 5'd0;
   assign rvfi_rd_wdata  = rvfi_rd_written ? wb_rd_data       : '0;
+
+  // no CSRs or privilege levels, so mode/ixl are fixed rather than real state
+  assign rvfi_trap      = mem_wb_q.valid && mem_wb_q.trap;
+  assign rvfi_halt      = 1'b0;
+  assign rvfi_intr      = 1'b0;
+  assign rvfi_mode      = 2'd3;  // M-mode
+  assign rvfi_ixl       = 2'd1;  // XLEN=32
   assign rvfi_mem_addr  = mem_wb_q.mem_addr;
   assign rvfi_mem_rmask = mem_wb_q.mem_rmask;
   assign rvfi_mem_wmask = mem_wb_q.mem_wmask;
-  assign rvfi_mem_rdata = mem_wb_q.mem_rdata;
+  assign rvfi_mem_rdata = mem_wb_q.mem_rdata_raw;
   assign rvfi_mem_wdata = mem_wb_q.mem_wdata;
 
   assign perf_stall = stall;
