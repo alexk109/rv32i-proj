@@ -1,0 +1,202 @@
+# Formal verification: scripts and toolchain reference
+
+Full detail behind the "verified three ways" claim in the README: what each
+script does, why the toolchain has the pieces it has, and how to reproduce
+every number cited there. `README.md` is the pitch; this is the manual.
+
+## The three verification methods
+
+### 1. Golden-model equivalence + the official ISA test suite
+
+```
+make verify
+```
+
+For every predictor, this runs a set of directed programs (`alu`, `branch`,
+`mem`, `hazards`, `bubblesort`, ...) on **both** cores and diffs their
+retirement streams instruction-for-instruction, then runs the official
+[riscv-tests](https://github.com/riscv-software-src/riscv-tests) `rv32ui`
+suite. The single-cycle core is the reference: if the pipeline commits the
+same architectural effects in the same order regardless of stalls/flushes,
+the streams are identical. This is what caught a JAL-link forwarding bug that
+was invisible with `PREDICTOR=none` and only appeared once branches were
+actually mispredicted — which is why `verify` sweeps every predictor rather
+than checking one.
+
+```
+==================== PREDICTOR=gshare ====================
+pipeline[gshare] vs single-cycle (golden) — retirement equivalence:
+  DIFF OK    smoke
+  DIFF OK    alu
+  DIFF OK    branch
+  ...
+  DIFF OK    statemachine
+rv32ui: 40 passed, 0 failed  (excluded: ma_data fence_i)
+```
+(repeated for `none`, `btfn`, `2bit`, `gshare` — real output, `make verify`,
+2026-07-26)
+
+`ma_data` is excluded because it tests misaligned-access trapping, which is
+implemented at the detection/suppression level (see Limitations below) but
+has no CSR/handler yet. `fence_i` needs self-modifying code, impossible on
+this Harvard-memory core.
+
+### 2. Formal: bounded model checking (BMC)
+
+```
+make formal-setup      # once
+make formal-gen
+make formal-run
+make formal-status
+```
+
+riscv-formal generates one property per RV32I instruction (does its result
+match a reference model?), plus cross-instruction properties (register
+forwarding, PC chaining, retirement ordering, ...) — 43 checks in total. BMC
+proves no violation exists within a bounded number of cycles (15–20,
+covering pipeline fill, a load-use stall, and a misprediction flush).
+
+```
+=== riscv-formal: cpu_pipeline ===
+
+  PASS 43
+```
+(real output, `make formal-run` in BMC mode, 43/43, 2026-07-26)
+
+A `make formal-gen FORMAL_CFG=deep` variant doubles every depth (~30 cycles)
+as a sanity check against depth-dependent artifacts; it also passes 43/43.
+
+### 3. Formal: unbounded proof (k-induction)
+
+```
+make formal-gen FORMAL_MODE=prove
+make formal-run
+make formal-status
+```
+
+BMC only rules out counterexamples within N cycles. k-induction proves a
+property for **all** N — a genuine "correct forever" result — but only if the
+property is *inductive*: true not just in reachable states, but in every
+state the transition relation doesn't explicitly forbid. Pipeline properties
+usually aren't inductive as stated (see `verif/formal/invariants.sv`), so
+induction alone leaves most checks `UNKNOWN` rather than proving them.
+
+Adding a handful of hand-written strengthening invariants (`x0 reads as zero`
+at every pipeline stage, asserted rather than assumed so they're proved
+alongside everything else) converts most of those `UNKNOWN`s into proofs:
+
+```
+=== riscv-formal: cpu_pipeline ===
+
+  PASS 39   UNKNOWN 4
+```
+(real output, `make formal-gen FORMAL_MODE=prove && make formal-run`, 2026-07-26)
+
+Every instruction-correctness check is proved for all time. The remaining
+`UNKNOWN`s are the checks that reason about *two* retirements at once
+(register-forwarding consistency, causality, backward PC chaining) — they
+need invariants relating pipeline state to the register file. A version of
+that was tried (six dynamic selects out of the flattened register file, one
+per source operand per pipeline stage) and dropped: it turned a ~10s BMC
+check into one that didn't return in 15 minutes. They still pass BMC at both
+depths, so there's strong bounded evidence and no known counterexample;
+they're just not proved unbounded.
+
+## The formal toolchain
+
+Everything the formal flow needs beyond `yosys`/`verilator`/`z3` lives inside
+this repo, either vendored or built by a setup script — nothing depends on
+paths outside the project.
+
+```
+tools/riscv-formal/    vendored (checks/ + insns/ from upstream, committed)
+tools/yosys-slang/     SystemVerilog frontend plugin, built by tools/setup.sh
+tools/yices/           SMT solver, downloaded prebuilt by tools/setup.sh
+tools/sby/             SymbiYosys, patched + built by tools/setup.sh
+tools/bin/sby          watchdog wrapper around the real sby (committed)
+```
+
+`make formal-setup` runs `tools/setup.sh`, which is idempotent — safe to
+re-run, each step skips if already built. `yosys`, `verilator`, and
+(optionally) `z3` are treated as system prerequisites, the same tier as a C
+compiler, and are checked but not vendored.
+
+**Why yosys-slang.** The core uses `module X import pkg::*;` headers and a
+package (`pipe_pkg`) that references a type from another package
+(`ctrl_pkg::ctrl_t`). Yosys's built-in SystemVerilog frontend rejects the
+first and can't elaborate the second at all, so the design is read through
+[yosys-slang](https://github.com/povik/yosys-slang) instead — configured in
+`verif/formal/checks.cfg` under `[script-defines]`.
+
+**Why a patched sby.** `abc pdr` (IC3), the strongest engine for unbounded
+proofs, needs its design converted to an AIG first. sby's own AIG-generation
+script runs `setundef` too early — a later pass (`aigmap`) can reintroduce
+`x`/`z` bits that `write_aiger` then rejects. `tools/patches/` carries a
+one-line fix (a second `setundef -anyseq` right before the write), applied
+automatically by `tools/setup.sh`.
+
+**Why `FORMAL_ENGINES` defaults to one engine.** `engines.py` can make sby
+race several engines and take the first conclusive answer — useful in
+principle, since smtbmc (k-induction) and abc pdr (IC3) have different
+strengths. In practice, racing more than one engine under `FORMAL_MODE=prove`
+reliably leaves sby's process alive after it has already written a correct
+result (a reaping bug in how it tears down the losing engine, reproduced
+consistently, not occasional). `tools/bin/sby` wraps every invocation in an
+external `timeout` as a backstop, so a hung check is bounded rather than
+infinite, but it still costs the full backstop duration even though the
+result was ready in seconds — so racing is opt-in, not default:
+```
+make formal-run FORMAL_ENGINES="smtbmc yices;smtbmc z3"   # reliable under bmc
+make formal-run FORMAL_ENGINES="smtbmc yices;abc pdr"      # needs the patch above
+```
+
+## Scripts in `verif/formal/`
+
+| File | Purpose |
+|---|---|
+| `checks.cfg` | What `make formal-gen` generates: ISA, solver, per-check depths, defines, the trap/RVFI conventions this core uses. Read this first to understand *why* a given depth or define is set the way it is — every non-obvious choice has a comment. |
+| `deep.cfg` | Same properties at ~2x depth, generated into a separate directory (`FORMAL_CFG=deep`) so it never clobbers the standard results. |
+| `wrapper.sv` | Connects `cpu_pipeline_top` to riscv-formal's RVFI checker and declares the two free variables (fetched instruction, loaded word) the whole proof depends on. |
+| `invariants.sv` | The strengthening invariants for k-induction, `bind`-attached so the core RTL stays untouched. |
+| `engines.py` | `genchecks.py` hardcodes one engine and no timeout; this rewrites the generated `.sby` files to use `FORMAL_ENGINES` (one engine by default, can race several) under `FORMAL_TIMEOUT`. Run automatically by `make formal-gen`. |
+| `status.py` | Reads every check's result and groups failures by the assertion that broke, resolving each back to its source line — what `make formal-status` runs. |
+| `gtkw/rv32i_disasm.py` | GTKWave translate-filter-process: renders `rvfi_insn` (and any `_instr` signal) as an RV32I mnemonic instead of a raw hex word. |
+| `gtkw/*.txt` | GTKWave translate-filter-files that turn the enum fields in `ctrl_pkg` (`alu_op`, `branch_op`, ...) back into names — yosys flattens SystemVerilog enums to plain bits, so without these a waveform just shows `01`. |
+
+Viewing a counterexample trace (Windows GTKWave from WSL):
+
+```
+gtkwave.exe "$(wslpath -w tools/riscv-formal/cores/cpu_pipeline/checks/<check>/engine_0/trace.vcd)"
+```
+
+## Makefile targets (formal)
+
+| Target | What it does |
+|---|---|
+| `formal-setup` | Runs `tools/setup.sh` — builds/downloads everything formal needs beyond yosys/verilator/z3. Idempotent. |
+| `formal-gen` | Stages `checks.cfg`/`wrapper.sv` into `tools/riscv-formal/cores/cpu_pipeline/` and runs `genchecks.py` to emit one `.sby` per property, then patches them via `engines.py`. Vars: `FORMAL_CFG` (`checks`/`deep`), `FORMAL_MODE` (`bmc`/`prove`), `FORMAL_ENGINES`, `FORMAL_TIMEOUT`. |
+| `formal-run` | Runs every generated check in parallel (`-j nproc`). Refuses to start if a run is already in progress; clears any interrupted (no-status) check directory first. Override with `CHECK=<name>` to run one. Does **not** depend on `formal-gen` — regenerating wipes results, including a check still running, so `formal-gen` is a separate, deliberate step. |
+| `formal-redo CHECK=<name>` | Discards one check's result and re-runs it. |
+| `formal-cover` | Runs just the vacuity check — that the harness can retire instructions at all. Everything else is meaningless if this doesn't pass. |
+| `formal-status` | Verdict counts, plus each failing/inconclusive check's assertion, source line, and trace path (`verif/formal/status.py`). |
+| `formal-status-all` | As above, plus every individual check and its runtime. |
+| `formal-clean` | Drops the whole generated check tree (`tools/riscv-formal/cores/cpu_pipeline/`). |
+
+`lint-synth` (outside the formal section) lints the core without the RVFI
+port block — the configuration that will actually be synthesized.
+
+## Known limitations
+
+- **No CSRs, no Zicsr, no interrupts.** Misaligned data access and misaligned
+  branch/jump targets are *detected* in EX and *suppressed* (no memory
+  access, no register write, no redirect to a bad target) — enough to satisfy
+  riscv-formal's trap properties — but there's no `mtvec`/`mepc`/`mcause` and
+  no handler, so it isn't a real trap vector yet.
+- **`verible-verilog-lint` isn't installed in this environment** — `make
+  lint-verible` (part of `make lint`) will fail with "command not found"
+  until it is. `make lint-verilator`, the RTL-correctness half, doesn't need
+  it and passes clean.
+- gshare ties the simpler 2-bit bimodal predictor rather than beating it —
+  a non-speculative global history register lags the pipeline by a few
+  cycles. See `results/predictor_results.md` for the full writeup and the
+  fix (speculative GHR with rollback on flush).

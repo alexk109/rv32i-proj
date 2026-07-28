@@ -35,3 +35,6 @@ tools/yices/
 tools/sby/
 tools/sby-src/
 tools/riscv-formal/cores/
+
+.claude/
+.vscode/
