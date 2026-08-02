@@ -248,15 +248,27 @@ module cpu_core
   logic [XLEN-1:0] alu_input_a;
   logic [XLEN-1:0] alu_input_b;
 
+  // a stage holds a forwardable result iff it will really write a real rd
+  logic mem_fwd_ok;
+  logic wb_fwd_ok;
+
   // !trap matters as much as reg_write: a trapping instruction never writes
   // its rd, so forwarding from it would hand out an uncommitted value
-  assign ex_rs1 = (id_ex_q.ctrl.uses_rs1 && ex_mem_q.valid && ex_mem_q.ctrl.reg_write && !ex_mem_q.trap && (ex_mem_q.rd_addr == id_ex_q.rs1_addr) && (ex_mem_q.rd_addr != 5'd0)) ? mem_alu_result :         //forward from MEM stage
-                  (id_ex_q.ctrl.uses_rs1 && mem_wb_q.valid && mem_wb_q.ctrl.reg_write && !mem_wb_q.trap && (mem_wb_q.rd_addr == id_ex_q.rs1_addr) && (mem_wb_q.rd_addr != 5'd0)) ? wb_rd_data            //forward from WB stage
-                                                                                                                                                                : id_ex_q.rs1_data;    //no forwarding, use value from ID stage
+  //
+  // the x0 term is spelled out here rather than folded into wb_reg_write: the
+  // register file drops x0 writes itself, so the write enable does not need it,
+  // but forwarding bypasses the register file and does
+  assign mem_fwd_ok = ex_mem_q.valid && ex_mem_q.ctrl.reg_write && !ex_mem_q.trap
+                      && (ex_mem_q.rd_addr != 5'd0);
+  assign wb_fwd_ok  = wb_reg_write && (mem_wb_q.rd_addr != 5'd0);
 
-  assign ex_rs2 = (id_ex_q.ctrl.uses_rs2 && ex_mem_q.valid && ex_mem_q.ctrl.reg_write && !ex_mem_q.trap && (ex_mem_q.rd_addr == id_ex_q.rs2_addr) && (ex_mem_q.rd_addr != 5'd0)) ? mem_alu_result :         //forward from MEM stage
-                  (id_ex_q.ctrl.uses_rs2 && mem_wb_q.valid && mem_wb_q.ctrl.reg_write && !mem_wb_q.trap && (mem_wb_q.rd_addr == id_ex_q.rs2_addr) && (mem_wb_q.rd_addr != 5'd0)) ? wb_rd_data            //forward from WB stage
-                                                                                                                                                                : id_ex_q.rs2_data;    // no forward
+  assign ex_rs1 = (id_ex_q.ctrl.uses_rs1 && mem_fwd_ok && (ex_mem_q.rd_addr == id_ex_q.rs1_addr)) ? mem_alu_result :  //forward from MEM stage
+                  (id_ex_q.ctrl.uses_rs1 && wb_fwd_ok  && (mem_wb_q.rd_addr == id_ex_q.rs1_addr)) ? wb_rd_data     :  //forward from WB stage
+                                                                                                    id_ex_q.rs1_data; //no forwarding, use value from ID stage
+
+  assign ex_rs2 = (id_ex_q.ctrl.uses_rs2 && mem_fwd_ok && (ex_mem_q.rd_addr == id_ex_q.rs2_addr)) ? mem_alu_result :  //forward from MEM stage
+                  (id_ex_q.ctrl.uses_rs2 && wb_fwd_ok  && (mem_wb_q.rd_addr == id_ex_q.rs2_addr)) ? wb_rd_data     :  //forward from WB stage
+                                                                                                    id_ex_q.rs2_data; // no forward
 
   //prediction signals and logic back to ID
   logic [XLEN-1:0] ex_alu_result;
