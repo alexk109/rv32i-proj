@@ -23,3 +23,8 @@ tools/sby-src/
 .vscode/
 CLAUDE.md
 graphify-out/
+
+## local run transcripts (evidence for the current session, not history)
+## acceptance criteria live in verif/criteria/ and ARE tracked -- the acceptance
+## argument for a commit has to survive the commit
+results/runs/
