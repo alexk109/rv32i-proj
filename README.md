@@ -1,5 +1,7 @@
 # RV32I CPU
 
+[![CI](https://github.com/alex4brown4-debug/cpu-project/actions/workflows/ci.yml/badge.svg)](https://github.com/alex4brown4-debug/cpu-project/actions/workflows/ci.yml)
+
 Design and verification of a CPU using RV32I base instruction set. 4 stage pipeline with prediction and hazard detection. 
 
 

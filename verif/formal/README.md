@@ -18,6 +18,18 @@ make formal-status     # PASS/FAIL/UNKNOWN counts and any counterexamples
 `make formal-run FORMAL_MODE=prove` switches BMC to unbounded k-induction;
 `make formal-gen FORMAL_CFG=deep` regenerates at ~2x depth (see `deep.cfg`).
 
+`make formal-setup` clones [riscv-formal](https://github.com/YosysHQ/riscv-formal)
+into `tools/riscv-formal` at a pinned commit (see `RISCV_FORMAL_REF` in
+`tools/setup.sh`); it is not committed here. The pin is deliberate — the check
+set and the invariants below are written against that exact revision of
+`insns/` and `checks/`, so a moving upstream would silently change what the
+passing counts mean.
+
+`genchecks.py` derives the core name from its working directory, so it only runs
+from inside `<riscv-formal>/cores/<name>/`. `make formal-gen` therefore creates
+`tools/riscv-formal/cores/cpu_pipeline/` and stages `checks.cfg` and `wrapper.sv`
+into it. That directory is generated, never hand-edited.
+
 ## What's here
 
 | File | Role |

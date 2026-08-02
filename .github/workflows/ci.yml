@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  VERILATOR_TAG: v5.050
+
+jobs:
+  lint:
+    name: lint (verilator + verible)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Built from source, not apt: the -Wall gate and --x-initial unique
+      # behave differently on the distro package, which lags several releases.
+      - name: Cache Verilator
+        id: cache-verilator
+        uses: actions/cache@v4
+        with:
+          path: ~/verilator-install
+          key: verilator-${{ env.VERILATOR_TAG }}-ubuntu-24.04
+
+      - name: Build Verilator
+        if: steps.cache-verilator.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git help2man perl python3 make autoconf g++ flex bison ccache \
+            libgoogle-perftools-dev numactl
+          git clone --depth 1 --branch "$VERILATOR_TAG" \
+            https://github.com/verilator/verilator.git /tmp/verilator
+          cd /tmp/verilator
+          autoconf && ./configure --prefix="$HOME/verilator-install"
+          make -j"$(nproc)" && make install
+
+      - name: Install Verible
+        run: |
+          url=$(curl -sL https://api.github.com/repos/chipsalliance/verible/releases/latest \
+            | grep -o 'https://[^"]*linux-static-x86_64.tar.gz' | head -1)
+          curl -sL "$url" -o /tmp/verible.tar.gz
+          mkdir -p "$HOME/verible" && tar xzf /tmp/verible.tar.gz -C "$HOME/verible" --strip-components=1
+          echo "$HOME/verible/bin" >> "$GITHUB_PATH"
+
+      - name: Add Verilator to PATH
+        run: echo "$HOME/verilator-install/bin" >> "$GITHUB_PATH"
+
+      - run: verilator --version && verible-verilog-lint --version | head -1
+
+      # lint-synth additionally proves the core elaborates in the no-RVFI
+      # configuration that synthesis would actually build.
+      - run: make lint-verilator
+      - run: make lint-synth
+
+      # Non-blocking until the style rule set is settled: the RTL predates
+      # verible's defaults (line-length 100, localparam naming), so the output
+      # is advisory rather than a gate. Fold into the step above once
+      # .rules.verible_lint is agreed.
+      - run: make lint-verible
+        continue-on-error: true
+
+  verify:
+    name: verify (golden-model diff + rv32ui)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Verilator
+        id: cache-verilator
+        uses: actions/cache@v4
+        with:
+          path: ~/verilator-install
+          key: verilator-${{ env.VERILATOR_TAG }}-ubuntu-24.04
+
+      - name: Build Verilator
+        if: steps.cache-verilator.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git help2man perl python3 make autoconf g++ flex bison ccache \
+            libgoogle-perftools-dev numactl
+          git clone --depth 1 --branch "$VERILATOR_TAG" \
+            https://github.com/verilator/verilator.git /tmp/verilator
+          cd /tmp/verilator
+          autoconf && ./configure --prefix="$HOME/verilator-install"
+          make -j"$(nproc)" && make install
+
+      # xpack's riscv-none-elf-gcc ships rv32i/ilp32 multilib, which the core
+      # needs; RISCV_PREFIX points the Makefile at it.
+      - name: Install RISC-V toolchain
+        run: |
+          url=$(curl -sL https://api.github.com/repos/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/latest \
+            | grep -o 'https://[^"]*linux-x64.tar.gz' | head -1)
+          curl -sL "$url" -o /tmp/riscv.tar.gz
+          mkdir -p "$HOME/riscv" && tar xzf /tmp/riscv.tar.gz -C "$HOME/riscv" --strip-components=1
+
+      - name: Add tools to PATH
+        run: echo "$HOME/verilator-install/bin" >> "$GITHUB_PATH"
+
+      - run: |
+          echo "RISCV_PREFIX=$HOME/riscv/bin/riscv-none-elf-" >> "$GITHUB_ENV"
+
+      - run: ${RISCV_PREFIX}gcc -march=rv32i -mabi=ilp32 --version | head -1
+
+      # Golden-model equivalence across every predictor, plus the official
+      # rv32ui suite. Formal is deliberately not in CI -- it is minutes of
+      # solver time, and the check set is reproduced by `make formal-*` locally.
+      - run: make verify
