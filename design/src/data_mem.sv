@@ -21,7 +21,7 @@ module data_mem
     input  logic            mem_read,
     input  logic            mem_write,
     input  logic [2:0]      memsize,       // size + signedness for load
-    
+
     //read data
     output logic [XLEN-1:0] rdata,
 

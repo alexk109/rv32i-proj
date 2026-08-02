@@ -1,7 +1,7 @@
 // dedicated branch compare unit
 
 
-module branch_cmp 
+module branch_cmp
     import riscv_pkg::*;
     import ctrl_pkg::*;
 (
@@ -16,7 +16,7 @@ logic take_branch; //internal signal for branch condition result
 
 always_comb begin
     take_branch = 1'b0;  // default to not taken
-    
+
     case (branch_op) // which branch condition
         BR_EQ:  take_branch = (rs1 == rs2);
         BR_NE:  take_branch = (rs1 != rs2);

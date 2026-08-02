@@ -81,7 +81,7 @@ lint-synth:
 
 ## lint-verible: style and naming rules, per-file
 lint-verible:
-	$(VERIBLE_LINT) $(RTL_SRCS)
+	$(VERIBLE_LINT) --rules_config_search $(RTL_SRCS)
 
 ## fmt: rewrite sources in canonical format, in place
 fmt:

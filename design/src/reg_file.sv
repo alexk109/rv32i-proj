@@ -4,7 +4,7 @@ module reg_file
   import riscv_pkg::*;
   import ctrl_pkg::*;
   #(
-    parameter P_ENABLE_BYPASS = 1 // bypass logic to prevent read-after-write hazards, disable for single cycle
+    parameter bit P_ENABLE_BYPASS = 1 // bypass logic to prevent read-after-write hazards, disable for single cycle
   )
 (
 
@@ -13,8 +13,8 @@ module reg_file
     input  logic            rst_n,
 
     // register file interface
-    input  logic [4:0]      rs1_addr, 
-    input  logic [4:0]      rs2_addr, 
+    input  logic [4:0]      rs1_addr,
+    input  logic [4:0]      rs2_addr,
     input  logic [4:0]      wr_addr,
     input  logic [XLEN-1:0] wr_data,
     input  logic            reg_write,
@@ -34,7 +34,7 @@ module reg_file
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       regs <= '{default: '0};
-    end 
+    end
     else if (reg_write && wr_addr == 5'd0) begin
       // writes to x0 are ignored
       regs[wr_addr] <= '0;

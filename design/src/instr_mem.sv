@@ -1,7 +1,7 @@
 // instruction memory
 // loaded from hex for simulation
 
-module instr_mem 
+module instr_mem
     import riscv_pkg::*;
     import ctrl_pkg::*;
 #(

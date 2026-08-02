@@ -1,0 +1,20 @@
+# Verible lint rule set for this core.
+#
+# Waived rules are convention mismatches, not defects -- each is disabled for a
+# stated reason rather than because it was noisy.
+
+# Verible's default constant regex rejects underscores, which would flag every
+# ALL_CAPS ISA constant (OPC_LOAD, F3_SB, REG_COUNT). ALL_CAPS_WITH_UNDERSCORES
+# is the convention for opcode/funct fields and is what this project uses.
+-parameter-name-style
+
+# Wants `mem [N]` instead of `mem [0:N-1]`. Equivalent, and the explicit range
+# documents the direction -- which matters here because instr_mem, data_mem and
+# reg_file are all $readmemh targets, and $readmemh fills left index first.
+-unpacked-dimensions-range-ordering
+
+# Enforcing a column limit here would mean reflowing lines whose only fault is a
+# long trailing comment, which is churn on working RTL for no defect caught.
+# Long lines that hid a real problem (the duplicated forwarding predicate in
+# cpu_core) were fixed by naming the subexpression, not by wrapping them.
+-line-length

@@ -1,13 +1,13 @@
   //immediate generator to reconstruct immediate values from instruction fields.
 
-  module imm_gen 
+  module imm_gen
     import riscv_pkg::*;
     import ctrl_pkg::*;
   (
     input  logic [31:0] instr,
     output logic [31:0] imm
   );
-  
+
 always_comb begin
   imm = '0;  // default to zero for instructions that don't use an immediate
   case (instr[6:0])

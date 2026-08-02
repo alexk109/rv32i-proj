@@ -74,7 +74,7 @@ module cpu_single_cycle_top
   );
 
   assign pc_plus4 = pc + 4;
-  
+
 
   ////////////////////////////
   // instruction memory
@@ -154,7 +154,7 @@ module cpu_single_cycle_top
   end
 
   assign alu_input_b = ctrl.alu_src_b ? imm : rs2_data;
-  
+
   ////////////////////////////
   // ALU
   ////////////////////////////
