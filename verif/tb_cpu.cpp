@@ -15,7 +15,7 @@
   #include "Vcpu_pipeline_top.h"
   #include "Vcpu_pipeline_top___024root.h"
   typedef Vcpu_pipeline_top Vdut;
-  #define DUT_REGS rootp->cpu_pipeline_top__DOT__reg_file_i__DOT__regs
+  #define DUT_REGS rootp->cpu_pipeline_top__DOT__core_i__DOT__reg_file_i__DOT__regs
 #else
   #include "Vcpu_single_cycle_top.h"
   #include "Vcpu_single_cycle_top___024root.h"

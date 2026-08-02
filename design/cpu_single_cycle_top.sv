@@ -80,7 +80,7 @@ module cpu_single_cycle_top
   // instruction memory
   ////////////////////////////
   instr_mem #(
-    .IMEM_SIZE(1025), //size in words
+    .IMEM_SIZE(1025), //size in words   // TODO: non-power-of-2 size, index range exceeds array depth
     .MEM_FILE("instr_mem.hex")
   ) instr_mem_i(
         .addr      (pc         ),   // I [XLEN-1:0] address

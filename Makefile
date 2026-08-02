@@ -49,6 +49,12 @@ ifeq ($(RVFI),1)
   VFLAGS += +define+RVFI
 endif
 
+# The RVFI retirement logic lives in a monitor bound into cpu_core, not in the
+# core RTL. It compiles into any build that defines RVFI (the core ports it
+# drives exist only then) and stays out of the shared filelist so lint-synth,
+# which omits RVFI, never pulls it in.
+RVFI_SRC  := $(if $(filter 1,$(RVFI)),verif/rvfi_monitor.sv verif/rvfi_bind.sv)
+
 # -Ttext=0 matters: RESET_PC is 0 and instr_mem indexes from 0, so the program must
 # link to start there. -nostdlib keeps out a C runtime the core cannot run.
 RVCFLAGS  := -march=rv32i -mabi=ilp32 -nostdlib -Ttext=0
@@ -67,7 +73,7 @@ lint: lint-verilator lint-verible
 
 ## lint-verilator: elaborate the whole core and check it (with RVFI)
 lint-verilator:
-	$(VERILATOR) --lint-only $(VFLAGS) $(WAIVERS) -f $(RTL_F) $(PRED_SRC) --top-module $(TOP)
+	$(VERILATOR) --lint-only $(VFLAGS) $(WAIVERS) -f $(RTL_F) $(PRED_SRC) $(RVFI_SRC) --top-module $(TOP)
 
 ## lint-synth: elaborate WITHOUT RVFI — the config Phase 3C will actually synthesize
 lint-synth:
@@ -136,10 +142,10 @@ ifeq ($(TOP),cpu_pipeline_top)
   TBFLAGS := -CFLAGS -DPIPELINE
 endif
 
-$(SIM_BIN): $(RTL_SRCS) $(PRED_SRC) $(TB_SRC) $(WAIVERS)
+$(SIM_BIN): $(RTL_SRCS) $(PRED_SRC) $(RVFI_SRC) $(TB_SRC) $(WAIVERS)
 	$(VERILATOR) $(VFLAGS) $(SIMFLAGS) $(WAIVERS) $(TBFLAGS) \
 	  --cc --exe --build --trace \
-	  -f $(RTL_F) $(PRED_SRC) --top-module $(TOP) \
+	  -f $(RTL_F) $(PRED_SRC) $(RVFI_SRC) --top-module $(TOP) \
 	  --Mdir $(OBJ_DIR) $(abspath $(TB_SRC))
 
 ## run: run a program on the core, e.g. make run PROG=smoke RUN=phase1_smoke
@@ -322,6 +328,7 @@ export SBY_WATCHDOG_SECS := $(shell echo $$(($(FORMAL_TIMEOUT) + 60)))
 
 ## formal-gen: stage verif/formal into riscv-formal and generate the check set
 formal-gen:
+	@test -d $(RISCV_FORMAL)/checks || { echo "riscv-formal not fetched -- run 'make formal-setup' first"; exit 1; }
 	@test -f $(YOSYS_SLANG) || { echo "yosys-slang not built -- run 'make formal-setup' first"; exit 1; }
 	mkdir -p $(FORMAL_DIR)
 	cp $(FORMAL_SRC)/wrapper.sv $(FORMAL_DIR)/

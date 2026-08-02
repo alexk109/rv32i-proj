@@ -3,7 +3,7 @@
 # themselves, all inside tools/ so nothing depends on paths outside this repo.
 # Safe to re-run: each step skips if its output already exists.
 #
-#   tools/riscv-formal/      vendored (committed, no build step)
+#   tools/riscv-formal/      the check/instruction models, cloned at a pinned commit
 #   tools/yosys-slang/       SystemVerilog frontend plugin, built here
 #   tools/yices/             SMT solver, downloaded prebuilt
 #   tools/sby/               SymbiYosys, patched and built here
@@ -45,9 +45,28 @@ fi
 
 if ! command -v cmake >/dev/null || ! command -v ninja >/dev/null; then
   step "installing cmake/ninja (user-local, needed to build yosys-slang)"
-  pip install --user --quiet cmake ninja
+  python3 -m pip install --user --quiet cmake ninja
 fi
 export PATH="$HOME/.local/bin:$PATH"
+
+step "riscv-formal (check generator and instruction models)"
+# Pinned, not tracking master: the generated check set and the invariants in
+# verif/formal are written against this exact revision of insns/ and checks/.
+# A moving upstream would silently change what "43/43 passing" means.
+RISCV_FORMAL_REF="${RISCV_FORMAL_REF:-c992aa61fdfe0846c5ed90324c596202a1c69b76}"
+RF_DIR="$TOOLS_DIR/riscv-formal"
+if [ -d "$RF_DIR/checks" ]; then
+  skip "riscv-formal"
+else
+  rm -rf "$RF_DIR"
+  # Fetching the SHA directly keeps this to one commit instead of the full
+  # history; GitHub allows it, a plain `clone --depth 1` cannot take a SHA.
+  git init -q "$RF_DIR"
+  git -C "$RF_DIR" remote add origin https://github.com/YosysHQ/riscv-formal.git
+  git -C "$RF_DIR" fetch -q --depth 1 origin "$RISCV_FORMAL_REF"
+  git -C "$RF_DIR" checkout -q FETCH_HEAD
+  pass "riscv-formal at ${RISCV_FORMAL_REF:0:12}"
+fi
 
 step "yosys-slang (SystemVerilog frontend plugin)"
 SLANG_SO="$TOOLS_DIR/yosys-slang/build/slang.so"

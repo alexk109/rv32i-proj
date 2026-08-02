@@ -122,8 +122,8 @@ module formal_invariants (
 endmodule
 
 // Port expressions are elaborated in the scope of the bound instance, so
-// these reach directly into cpu_pipeline_top's internals.
-bind cpu_pipeline_top formal_invariants formal_invariants_i (
+// these reach directly into cpu_core's internals.
+bind cpu_core formal_invariants formal_invariants_i (
     .clk               (clk),
     .rst_n             (rst_n),
 

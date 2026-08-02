@@ -29,12 +29,6 @@ module data_mem
     // since the load specs do their own byte extraction from it
     output logic [XLEN-1:0] rdata_raw
 
-`ifdef RISCV_FORMAL
-    ,
-    // addressed word, supplied by the formal harness -- see instr_mem.sv
-    input  logic [XLEN-1:0] formal_word
-`endif
-
   );
 
 //decode address
@@ -47,17 +41,6 @@ assign addr_byte = addr[1:0];
 // addressed word before byte selection -- one signal feeds both rdata and
 // rdata_raw, so they can't disagree about what was read
 logic [XLEN-1:0] read_word;
-
-`ifdef RISCV_FORMAL
-
-// no storage array under formal: 1024 words would dominate the solver, and
-// the load specs only check against what this module reports, never against
-// what a prior store wrote -- so the word can be free
-assign read_word = formal_word;
-
-wire _unused_formal_dmem = &{1'b0, clk, rst_n, wdata, mem_write};
-
-`else
 
 logic [XLEN-1:0] dmem [0:DMEM_SIZE-1]; //32 x memsize memory array
 
@@ -84,8 +67,6 @@ end
 assign read_word = dmem[ addr_word ];
 
 wire _unused_dmem_rst = &{1'b0, rst_n};
-
-`endif
 
 //combinational read port
 always_comb begin

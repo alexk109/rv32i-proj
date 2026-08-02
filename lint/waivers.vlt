@@ -33,6 +33,17 @@ lint_off -rule UNUSEDSIGNAL -file "*design/cpu_single_cycle_top.sv" -match "*'ct
 // -- named-but-empty rather than omitted, so the pin list stays exhaustive.
 lint_off -rule PINCONNECTEMPTY -file "*design/cpu_single_cycle_top.sv"
 
+// The writeback bundle carries fields that exist only for the RVFI monitor
+// (mem_addr/mask/wdata, the raw load word, the source-register snapshot). With
+// RVFI undefined -- the synthesis config -- the core reads none of them and
+// synthesis prunes them; the bound monitor is their only consumer.
+lint_off -rule UNUSEDSIGNAL -file "*design/cpu_core.sv" -match "*'mem_wb_q'*"
+
+// The RVFI monitor taps the whole writeback bundle but reports only the
+// architecturally-visible fields; the datapath-only members (alu_result,
+// mem_rdata, pc_plus4) reach it but are never read.
+lint_off -rule UNUSEDSIGNAL -file "*verif/rvfi_monitor.sv" -match "*'mem_wb_q'*"
+
 // Predictor schemes all define module `predictor` (fixed, so the top's single
 // instantiation binds to whichever file the build selects) but live in files
 // named predictor_<scheme>.sv. That filename/module mismatch is the whole

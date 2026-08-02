@@ -16,4 +16,5 @@ design/src/instr_mem.sv
 design/src/data_mem.sv
 
 design/cpu_single_cycle_top.sv
+design/cpu_core.sv
 design/cpu_pipeline_top.sv

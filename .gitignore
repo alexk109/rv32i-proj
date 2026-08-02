@@ -2,39 +2,24 @@
 doc/*
 
 ## verilator build output
-verif/sim/obj_dir/
-verif/sim/obj_dir_cpu_pipeline_top/
-verif/sim/obj_dir_cpu_pipeline_top_2bit/
-verif/sim/obj_dir_cpu_pipeline_top_btfn/
-verif/sim/obj_dir_cpu_pipeline_top_gshare/
-verif/sim/obj_dir_cpu_pipeline_top_none/
-verif/sim/obj_dir_cpu_single_cycle_top/
-verif/sim/obj_dir_cpu_single_cycle_top_2bit/
-verif/sim/obj_dir_cpu_single_cycle_top_btfn/
-verif/sim/obj_dir_cpu_single_cycle_top_gshare/
-verif/sim/obj_dir_cpu_single_cycle_top_none/
-verif/sim/obj_dir_cpu_single_cycle_top_twobit/
+verif/sim/obj_dir*/
 
 ## per-run artifacts: compiled programs, memory images, waveforms
-verif/sim/runs/**/*.elf
-verif/sim/runs/**/*.bin
-verif/sim/runs/**/*.hex
-verif/sim/runs/**/*.vcd
-verif/sim/runs/**/*.fst
-verif/sim/runs/**/*.log
+verif/sim/runs/*/
 
 *.log
 
 ## per-run artifacts
 verif/sim/riscv-tests/upstream/
 
-## formal: built by tools/setup.sh, not committed (tools/riscv-formal IS
-## committed -- it's vendored source, not a build product)
+## formal: fetched/built by tools/setup.sh, none of it committed
+tools/riscv-formal/
 tools/yosys-slang/
 tools/yices/
 tools/sby/
 tools/sby-src/
-tools/riscv-formal/cores/
 
 .claude/
 .vscode/
+CLAUDE.md
+graphify-out/
