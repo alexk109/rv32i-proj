@@ -1,8 +1,8 @@
 # RV32I CPU
 
-[![CI](https://github.com/alex4brown4-debug/cpu-project/actions/workflows/ci.yml/badge.svg)](https://github.com/alex4brown4-debug/cpu-project/actions/workflows/ci.yml)
+[![CI](https://github.com/alexk109/rv32i-proj/actions/workflows/ci.yml/badge.svg)](https://github.com/alexk109/rv32i-proj/actions/workflows/ci.yml)
 
-Design and verification of a CPU using RV32I base instruction set. 4 stage pipeline with prediction and hazard detection. 
+Design and verification of a CPU using RV32I base instruction set. 5 stage pipeline with prediction and hazard detection. 
 
 
 ## Highlights
@@ -28,8 +28,8 @@ Cycles per Instruction (CPI):
 - **Golden-model equivalence**: the pipeline's RVFI retirement stream matches a
   single-cycle reference instruction-for-instruction, across all 4 predictors. This catches
   pipeline-only bugs — a bad forward, a missed flush — that a self-checking test can miss.
-  The core also passes the official `riscv-tests` rv32ui suite, and runs common programs like
-  bubblesort and binary search. 
+  The core also passes the `riscv-tests` rv32ui suite, and runs common programs like
+  bubblesort and search algorithms. 
 
 ![Waveform of a store/load sequence in GTKWave](image.png)
 A simple program doing some addis and then storing and loading the result, shown in gtkwave
@@ -40,7 +40,7 @@ A simple program doing some addis and then storing and loading the result, shown
 
 ```
 make lint           # verilator -Wall + verible, the bar RTL has to clear
-make verify         # golden-model diff + official ISA test suite, on all predictors
+make verify         # golden-model diff + ISA test suite, on all predictors
 make stats          # CPI and flush-rate tables for all predictors
 make formal-setup && make formal-gen && make formal-run && make formal-status
 ```
