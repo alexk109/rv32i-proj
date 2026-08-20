@@ -89,6 +89,9 @@ jobs:
           autoconf && ./configure --prefix="$HOME/verilator-install"
           make -j"$(nproc)" && make install
 
+      - name: Install build dependencies
+        run: sudo apt-get install -y ccache
+
       # xpack's riscv-none-elf-gcc ships rv32i/ilp32 multilib, which the core
       # needs; RISCV_PREFIX points the Makefile at it.
       - name: Install RISC-V toolchain
